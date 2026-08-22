@@ -1,125 +1,137 @@
 # API & Protocol Contracts
 
-> Builds on every component doc in `03-components/`. Three surfaces: the **Core REST API** (humans
-> via Web UI), the **Realtime API** (WebSocket, live updates), and the **Agent Protocol** (the
-> Orchestrator ↔ marketplace agent wire contract).
+> Four surfaces: the **Meridian MCP Server** (what the harness calls), the **event stream** (what
+> wakes it), the **REST API** (humans and admin), and the **realtime channel** (live UI).
 
 ---
 
-## 1. Core REST API (indicative surface)
+## 1. The Meridian MCP Server
+
+This is the harness's entire interface to Meridian. Exposed over streamable HTTP; authenticated
+per agent profile. Every tool is subject to RBAC, ticket visibility, and workflow validation
+server-side ([`permissions-rbac.md`](03-components/permissions-rbac.md)).
+
+### Discovery and work acquisition
+
+| Tool | Purpose |
+|---|---|
+| `tickets.query` | Fetch tickets matching filter criteria (`ticket_types`, `statuses`, `labels`, `priorities`, `severities`, `phase_ids`, `sprint_ids`, `unassigned_only`, `claimable_only`). Returns only tickets the calling profile may see |
+| `tickets.get` | Full payload for one ticket, field-filtered by the profile's scope and field sensitivity |
+| `tickets.claim` | Atomic claim; returns `{lease_token, leased_until}` or fails if already leased |
+| `tickets.renew_claim` | Extend the lease during long work |
+| `tickets.release_claim` | Release without a terminal outcome |
+
+### Capability discovery
+
+| Tool | Purpose |
+|---|---|
+| `capabilities.list` | **The resolved MCP grant set for this profile and ticket** — servers, tools, schemas, `capability_tags`, health, and which tools are approval-gated. Ungranted servers are absent, not marked forbidden |
+
+This is the call that makes D5 work: the harness reasons over what this returns to choose where to
+route, and cannot see or request anything outside it.
+
+### Progress and outcomes
+
+| Tool | Purpose |
+|---|---|
+| `tickets.comment` | Post a `note` / `proposal` comment |
+| `tickets.update_status` | Request a transition — validated by the Workflow Engine, rejected if illegal or approval-gated |
+| `tickets.update_fields` | Patch fields the profile may write |
+| `tickets.complete` | Attach artifacts, close the leg as `completed` |
+| `tickets.ask_human` | Post a question, move to a blocked state, start the SLA clock; **leg stays open** |
+| `tickets.handoff` | Close the leg, create a `HandoffEvent` with a `context_bundle` |
+| `tickets.reject` | Close the leg as `rejected` with a reason |
+| `usage.report` | Submit `UsageRecord` rows (tokens, cache, model, `harness_step_id`) and MCP call costs for the leg |
+
+### Contract notes
+
+- Every mutating tool requires the `lease_token` from `claim`; a stale token is rejected, so a
+  resumed harness cannot clobber a reassigned ticket.
+- Every call carries an idempotency key; retries never double-apply an artifact or double-charge a
+  cost entry.
+- Tool errors are typed (`not_permitted`, `invalid_transition`, `lease_lost`, `budget_exceeded`,
+  `not_visible`) so the harness can react correctly instead of guessing from a message string.
+
+---
+
+## 2. The Event Stream
+
+Meridian pushes to registered harnesses when a `TriggerRule` matches. Transport is per
+`HarnessRegistration.event_transport`: `webhook`, `sse`, or `poll_only` (no push at all).
+
+```json
+{
+  "event": "ticket.matched_rule",
+  "rule_id": "…", "rule_name": "Auto-triage P1 incidents",
+  "ticket_id": "…", "ticket_key": "OPS-142",
+  "agent_profile_id": "…",
+  "occurred_at": "2026-08-22T02:14:03Z"
+}
+```
+
+Deliberately **thin** — an identifier and a reason, not the ticket. The harness calls
+`tickets.get` to fetch content, so payload filtering and visibility checks happen at read time
+against current state, and an event sitting in a retry queue can never deliver stale or
+since-restricted data.
+
+Other events: `ticket.answer_posted` (resume a blocked run), `ticket.claim_revoked`,
+`run.cancel_requested` (human takeover), `budget.threshold_crossed`.
+
+Webhook deliveries are HMAC-signed with the registration's shared secret and carry a timestamp
+freshness window.
+
+---
+
+## 3. Harness Registration
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/v1/projects` | Create project (methodology, workflow) |
-| `POST` | `/v1/projects/{id}/sprints` | Create sprint |
-| `POST` | `/v1/sprints/{id}/start` \| `/close` | Sprint lifecycle |
-| `POST` | `/v1/tickets` | Create ticket |
-| `PATCH` | `/v1/tickets/{id}` | Field edits (routed through Workflow Engine for status changes) |
-| `POST` | `/v1/tickets/{id}/assign` | Body: `{assignee_type, assignee_id, role}` — same endpoint for human or agent assignee (overview SC-1) |
-| `POST` | `/v1/tickets/{id}/comments` | Add comment (`kind`: note/question/proposal/answer) |
-| `POST` | `/v1/tickets/{id}/links` | Create `TicketLink` |
-| `GET` | `/v1/tickets/{id}/execution-trail` | Full `ExecutionLeg`/`HandoffEvent` history |
-| `GET` | `/v1/tickets/{id}/roi` | `RoiSummary` for the ticket |
-| `GET` | `/v1/projects/{id}/roi/rollup?scope=sprint\|project` | Aggregated ROI dashboard data |
-| `GET` | `/v1/marketplace/listings` | Browse catalog (filterable by `capability_tags`) |
-| `POST` | `/v1/workspaces/{id}/agent-installations` | Install an agent |
-| `PATCH` | `/v1/agent-installations/{id}` | Update `permission_scope`, `budget_ceiling`, `allowed_handoff_targets` |
+| `POST` | `/v1/harnesses` | Register: name, kind, `callback_url`, `event_transport` |
+| `POST` | `/v1/harnesses/{id}/heartbeat` | Liveness; missed heartbeats release leases in bulk |
+| `GET` | `/v1/harnesses/{id}/profiles` | Agent profiles bound to this harness |
 
-All write endpoints require the caller's role to satisfy the RBAC check in
-[`permissions-rbac.md`](03-components/permissions-rbac.md) before the Workflow Engine even
-evaluates the transition.
+Credentials are issued per **agent profile**, not per harness, so one harness backing several
+profiles cannot use one profile's grants while acting as another.
 
 ---
 
-## 2. Realtime API (WebSocket)
+## 4. REST API (humans and admin)
 
-Subscription-based: a client subscribes to `ticket:{id}`, `board:{project_id}`, or
-`presence:{project_id}` channels and receives events matching the `ActivityEvent` types plus
-presence-only events (`presence.joined`, `presence.agent_running`) that aren't persisted to the
-ticket history since they're ephemeral state, not audit-worthy facts.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/projects` | Create project (template, delivery mode, status scheme, budget, visibility defaults) |
+| `POST` | `/v1/projects/{id}/phases` \| `/sprints` \| `/gates` | Planning containers |
+| `POST` | `/v1/gates/{id}/decision` | Approve / reject / waive |
+| `GET` | `/v1/projects/{id}/timeline?from=&to=&group_by=` | Server-aggregated timeline data |
+| `POST` | `/v1/tickets` · `PATCH` `/v1/tickets/{id}` | Ticket CRUD |
+| `POST` | `/v1/tickets/{id}/assign` | `{assignee_type, assignee_id, role}` — one path for human or agent profile |
+| `PUT` | `/v1/tickets/{id}/visibility` · `POST` `/grants` | Visibility level and explicit shares |
+| `GET` | `/v1/tickets/{id}/execution-trail` | Legs, handoffs, and MCP calls made |
+| **Admin** | | |
+| `POST` | `/v1/status-schemes` · `POST` `/{id}/versions` | Define and version status schemes |
+| `POST` | `/v1/status-schemes/{id}/impact-preview` | Which tickets a proposed change would move |
+| `POST` | `/v1/ticket-types` | Field schemas, sensitivity, SLA, agent I/O contract |
+| `POST` | `/v1/projects/{id}/visibility-rules` · `/trigger-rules` | Automation and confidentiality policy |
+| `POST` | `/v1/mcp/installations` · `/v1/mcp/private-registrations` | Enable marketplace or private MCP servers |
+| `POST` | `/v1/agent-profiles` · `/{id}/grants` | Define profiles and grant MCP tools |
+| `POST` | `/v1/budgets` | Budgets at any scope |
+| **Analytics** | | |
+| `GET` | `/v1/analytics/usage?scope_type=&scope_id=&from=&to=` | Token and cost rollups |
+| `GET` | `/v1/analytics/efficiency?scope_type=&scope_id=` | Efficiency metrics |
+| `GET` | `/v1/analytics/roi?scope_type=project\|sprint\|phase\|portfolio` | ROI rollups |
 
-```json
-{ "channel": "ticket:9f2a...", "event": "status_changed", "payload": { "from": "InProgress", "to": "NeedsInput" }, "occurred_at": "..." }
-```
-
-This is the transport [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) §4
-(presence, live steering) and the board/timeline live-update behavior in
-[`01-architecture.md`](01-architecture.md) §3 run over.
-
----
-
-## 3. The Agent Protocol
-
-This is the open contract referenced throughout `03-components/agent-execution-and-handoff.md` and
-formalized in [ADR-0002](adr/0002-agent-protocol-standard.md). Any agent, in any language, on any
-infrastructure, participates in the marketplace by implementing these five operations.
-
-### 3.1 Dispatch
-
-```
-POST {agent.endpoint_url}/v1/runs
-Authorization: Bearer {per-installation token}
-```
-```json
-{
-  "run_id": "generated by Orchestrator",
-  "protocol_version": "1.0",
-  "ticket": {
-    "type": "bug",
-    "fields": { "...": "filtered per permission_scope, per §2 of agent-execution-and-handoff.md" }
-  },
-  "context_bundle": { "...": "present only if this run follows a handoff" },
-  "budget_usd": 5.00,
-  "deadline": "2026-08-23T00:00:00Z",
-  "callback": {
-    "completed_url": "...", "blocked_url": "...", "handoff_url": "...", "rejected_url": "..."
-  }
-}
-```
-Response: `202 { "accepted": true }` or `409 { "accepted": false, "reason": "..." }` (immediate
-reject, e.g. out of capacity).
-
-### 3.2 Callback: Completed
-
-```json
-{ "run_id": "...", "artifacts": { "...": "per ticket type's output_contract" },
-  "cost": { "amount_usd": 0.42, "raw_metric": { "tokens_in": 1200, "tokens_out": 800, "model": "..." } },
-  "confidence": 0.91 }
-```
-
-### 3.3 Callback: Blocked (ask-human)
-
-```json
-{ "run_id": "...", "question": "Which environment should this deploy to?",
-  "partial_artifacts": { "...": "optional" } }
-```
-Orchestrator later calls `POST {endpoint_url}/v1/runs/{run_id}/resume` with `{ "answer": "..." }`.
-
-### 3.4 Callback: Handoff
-
-```json
-{ "run_id": "...", "reason_code": "needs_different_capability",
-  "context_bundle": { "summary": "...", "artifacts_so_far": {...}, "confidence": 0.4 },
-  "suggested_capability_tags": ["legal-review"] }
-```
-
-### 3.5 Callback: Rejected
-
-```json
-{ "run_id": "...", "reason": "ticket_type_not_supported" }
-```
-
-All callbacks are HMAC-signed with the installation's `webhook_secret` (see
-[`06-security.md`](06-security.md) §3); the Orchestrator rejects unsigned or mis-signed callbacks
-before they touch any ticket state.
+All reads apply the visibility predicate; all writes apply RBAC before the Workflow Engine sees
+the request.
 
 ---
 
-## 4. Idempotency and Ordering
+## 5. Realtime Channel
 
-Every dispatch and callback carries `run_id`; the Orchestrator deduplicates retried callbacks by
-`run_id` + callback type, so a network retry from an agent's side can never double-apply an
-artifact or double-charge a `CostEntry`. Realtime events are ordered per-ticket by the
-`ActivityEvent` sequence, so out-of-order WebSocket delivery (possible under fan-out) never causes
-a client to render a stale status over a newer one — clients apply events by comparing
-`occurred_at`/sequence, not arrival order.
+WebSocket subscriptions to `ticket:{id}`, `timeline:{project_id}`, `board:{project_id}`,
+`presence:{project_id}`. Carries persisted `ActivityEvent`s plus ephemeral presence
+(`presence.agent_running`, `presence.mcp_call` — "calling `itsm.search_similar`") that is not
+written to ticket history.
+
+Clients apply events by sequence, not arrival order, so out-of-order fan-out never renders a stale
+status over a newer one. Subscriptions are visibility-filtered at the server: a client is never
+sent an event for a ticket it may not see.

@@ -1,23 +1,46 @@
 # Meridian — Documentation Index
 
-Read in this order. Each doc links forward to the components/details it depends on and back to the concepts it builds on.
+Read in this order. Each doc links forward to the components it depends on and back to the
+concepts it builds on.
 
-1. [`00-overview.md`](00-overview.md) — what Meridian is, who it's for, what it explicitly does not do, and how success is measured.
-2. [`01-architecture.md`](01-architecture.md) — the services, how they talk to each other, and why.
-3. [`02-data-model.md`](02-data-model.md) — every entity in the system and the relationships between them. Nearly every other doc refers back to this one.
-4. **Components** (`03-components/`) — one file per subsystem:
-   - [`timeline-and-sprints.md`](03-components/timeline-and-sprints.md)
-   - [`ticketing.md`](03-components/ticketing.md)
-   - [`agent-marketplace.md`](03-components/agent-marketplace.md)
-   - [`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md)
-   - [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md)
-   - [`roi-analytics.md`](03-components/roi-analytics.md)
-   - [`permissions-rbac.md`](03-components/permissions-rbac.md)
-   - [`notifications-and-integrations.md`](03-components/notifications-and-integrations.md)
-5. [`04-api-contracts.md`](04-api-contracts.md) — REST/WebSocket surface and the Agent Protocol wire format.
-6. [`05-sequence-flows.md`](05-sequence-flows.md) — worked end-to-end examples tying the components together.
-7. [`06-security.md`](06-security.md) — tenancy, sandboxing, secrets, audit.
+1. [`00-overview.md`](00-overview.md) — what Meridian is, the seven differentiators, personas,
+   non-goals, and how success is measured.
+2. [`01-architecture.md`](01-architecture.md) — the record plane vs. the execution plane, the
+   service map, the trigger model, and who decides what.
+3. [`02-data-model.md`](02-data-model.md) — every entity and relationship. Nearly every other doc
+   refers back to this one.
+4. **Components** (`03-components/`):
+
+   | Doc | Covers |
+   |---|---|
+   | [`timeline.md`](03-components/timeline.md) | The primary surface: marks, status colour, swimlanes, dependencies, baseline vs actual |
+   | [`delivery-modes.md`](03-components/delivery-modes.md) | Waterfall, agile, kanban, hybrid on one model |
+   | [`ticketing.md`](03-components/ticketing.md) | Ticket types incl. incident/problem/change, status graphs, links, automations |
+   | [`project-administration.md`](03-components/project-administration.md) | Project creation, templates, status definition, tracking configuration |
+   | [`mcp-marketplace.md`](03-components/mcp-marketplace.md) | MCP catalog, manifests, effect classes, certification, private registration |
+   | [`agent-harness.md`](03-components/agent-harness.md) | Trigger rules, claim/lease, MCP routing, outcomes, handoff, guardrails |
+   | [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) | Co-assignment, ask-human, presence, live takeover, feedback signals |
+   | [`roi-analytics.md`](03-components/roi-analytics.md) | Token accounting, cost split, efficiency metrics, budgets, ROI at task and project level |
+   | [`permissions-rbac.md`](03-components/permissions-rbac.md) | Human roles, the three-layer MCP grant model, ticket visibility management |
+   | [`notifications-and-integrations.md`](03-components/notifications-and-integrations.md) | Fan-out, digesting, inbound integrations |
+
+5. [`04-api-contracts.md`](04-api-contracts.md) — the Meridian MCP tool surface, event stream,
+   harness registration, REST, and realtime.
+6. [`05-sequence-flows.md`](05-sequence-flows.md) — worked end-to-end examples.
+7. [`06-security.md`](06-security.md) — tenancy, visibility enforcement, MCP trust, prompt
+   injection, credentials, audit.
 8. [`07-roadmap.md`](07-roadmap.md) — phased delivery plan.
-9. `adr/` — standalone decision records, referenced from the docs above where relevant.
+9. `adr/` — decision records:
 
-**Document status:** Living design document, no code yet. Intended to be concrete enough that implementation can start directly from this tree.
+   | ADR | Decision |
+   |---|---|
+   | [0001](adr/0001-modular-monolith-vs-microservices.md) | Modular monolith at MVP |
+   | [0002](adr/0002-mcp-as-integration-substrate.md) | MCP is the sole integration substrate |
+   | [0003](adr/0003-event-sourced-ticket-activity.md) | Ticket history is an append-only event log |
+   | [0004](adr/0004-roi-attribution-model.md) | ROI attributed by time/cost share across legs |
+   | [0005](adr/0005-handoff-loop-protection.md) | Four-layer handoff loop protection |
+   | [0006](adr/0006-unified-waterfall-and-agile.md) | One model for all four delivery modes |
+   | [0007](adr/0007-harness-owned-routing.md) | Harness pulls and routes; Meridian governs |
+
+**Document status:** Living design document, no code yet. Intended to be concrete enough that
+implementation can start directly from this tree.

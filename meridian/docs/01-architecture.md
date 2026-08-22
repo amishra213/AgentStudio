@@ -4,73 +4,67 @@
 
 ---
 
-## 1. System Context
+## 1. Two Planes
+
+The single most important structural decision: Meridian is split into a **record plane** and an
+**execution plane**, and they meet only over MCP.
+
+| | Record plane (Meridian) | Execution plane (harness + MCP servers) |
+|---|---|---|
+| Owns | Timeline, tickets, statuses, assignments, permissions, audit, ROI | Reasoning loops, tool calls, doing the actual work |
+| Runs | Meridian's own services | OpenHands or equivalent, plus whatever MCP servers are enabled |
+| Talks to the other via | The **Meridian MCP Server** (tools the harness calls) and an **event stream** (which wakes the harness) | MCP client calls into Meridian; MCP client calls out to enabled servers |
+| Fails how | If it's down, nothing is recorded — hard stop | If it's down, tickets simply sit unworked; humans continue normally |
+
+This is why the harness is replaceable. Meridian never holds a reference to an agent framework; it
+holds tickets and an MCP surface over them.
 
 ```mermaid
 flowchart TB
     subgraph Users
-        PM[PM / Architect / Consultant / Engineer]
-        Stake[Stakeholder]
+        PM[PM / Architect / Ops / Engineer]
         Admin[Workspace Admin]
-        Vendor[Agent Vendor]
+        Pub[MCP Server Publisher]
     end
 
-    subgraph Meridian["Meridian Platform"]
-        Core[Core PM Service]
-        Wf[Workflow Engine]
-        Mkt[Agent Marketplace Service]
-        Orch[Agent Orchestrator]
-        Collab[Collaboration / Realtime Service]
-        Roi[ROI & Analytics Service]
-        Notif[Notification Service]
-        WebUI[Web UI]
+    subgraph Record["Record plane — Meridian"]
+        WebUI[Web UI: timeline, board, ticket, dashboards]
+        Core[Core Service: projects, phases, sprints, tickets]
+        Wf[Workflow Engine: status graphs, automations]
+        Trig[Trigger Service: event stream + schedules]
+        Cat[MCP Catalog & Enablement]
+        Rbac[RBAC / Policy]
+        Roi[ROI & Analytics]
+        Notif[Notifications]
+        MMCP[["Meridian MCP Server"]]
     end
 
-    subgraph External["External Agents (any vendor, any stack)"]
-        AgentA[Agent Process A]
-        AgentB[Agent Process B]
+    subgraph Exec["Execution plane"]
+        Harness[Agent Harness<br/>OpenHands or equivalent]
     end
 
-    subgraph Integrations
-        Slack
-        GitHubExt[GitHub / GitLab]
-        Email
-        SSO[SSO / IdP]
-        Payments[Payments Provider]
+    subgraph Servers["Enabled MCP servers"]
+        S1[Vendor MCP<br/>from marketplace]
+        S2[Private / self-hosted MCP]
+        S3[Local stdio MCP]
     end
 
-    PM --> WebUI
-    Stake --> WebUI
-    Admin --> WebUI
-    Vendor -->|publish manifest| Mkt
+    PM --> WebUI --> Core
+    Admin --> Cat
+    Pub -->|publish manifest| Cat
 
-    WebUI --> Core
-    WebUI --> Collab
-    WebUI --> Roi
-    WebUI --> Mkt
-
-    Core --> Wf
-    Core --> Notif
-    Core -->|ticket assigned to agent| Orch
-    Orch <-->|Agent Protocol over HTTP/WebSocket| AgentA
-    Orch <-->|Agent Protocol over HTTP/WebSocket| AgentB
-    Orch --> Core
-    Orch --> Roi
-
+    Core --> Wf --> Trig
     Core --> Roi
-    Notif --> Slack
-    Notif --> Email
-    Core <--> GitHubExt
-    Admin --> SSO
-    Mkt --> Payments
-```
+    Core --> Notif
 
-**Key point:** agents are **external processes**, owned and hosted by whoever published them
-(an internal team or a third-party vendor). Meridian does not run agent reasoning loops itself —
-it runs the **Agent Orchestrator**, which dispatches ticket payloads to installed agents over the
-[Agent Protocol](03-components/agent-execution-and-handoff.md) and processes their responses
-(complete / blocked / handoff / rejected). This mirrors how a CI system dispatches jobs to runners
-without being a runner itself.
+    Trig -->|"event: ticket matched a rule"| Harness
+    Harness -->|"scheduled sweep: tickets.query(filter)"| MMCP
+    MMCP --> Core
+    Rbac -.->|resolves allowed server + tool set| MMCP
+    MMCP -->|"allowed MCP servers for this agent profile"| Harness
+    Harness --> S1 & S2 & S3
+    Harness -->|"tickets.update / comment / handoff / ask_human"| MMCP
+```
 
 ---
 
@@ -78,85 +72,97 @@ without being a runner itself.
 
 | Service | Owns | Does not own |
 |---|---|---|
-| **Core PM Service** | Workspaces, projects, timelines, sprints, tickets, ticket types, labels, links, comments, activity log (event store) | Agent execution, ROI computation |
-| **Workflow Engine** | Per-project status graphs, transition validation, automation rules ("when status → X, do Y") | Ticket content |
-| **Agent Marketplace Service** | Agent manifests, versioning, certification tiers, ratings/reviews, per-workspace installs, entitlements, metered billing events | Running agents |
-| **Agent Orchestrator** | Dispatch of tickets to installed agents, Agent Protocol session lifecycle, handoff routing, budget/time-ceiling enforcement, loop detection | Agent internal reasoning, ticket data model |
-| **Collaboration / Realtime Service** | WebSocket fan-out for live ticket/board updates, presence, ask-human blocking state, co-assignment turn-taking | Persisted ticket state (delegates to Core) |
-| **ROI & Analytics Service** | Cost/time capture per execution leg, baseline estimation, ROI rollups, dashboards | Billing settlement |
-| **Notification Service** | Fan-out to email/Slack/webhooks/in-app, digesting and de-duplication | Message content authoring (delegates to Core events) |
-| **Web UI** | Timeline/Gantt view, board view, ticket detail, agent marketplace browser, ROI dashboards | All server-side state |
+| **Core Service** | Workspaces, projects, delivery modes, phases, gates, sprints, tickets, links, comments, assignments, and the append-only `activity_event` log | Execution, routing, ROI computation |
+| **Workflow Engine** | Per-type status graphs, transition validation, automations | Ticket content |
+| **Trigger Service** | Trigger rules (filter criteria), event fan-out to registered harnesses, scheduled sweep coordination, claim/lease bookkeeping | Deciding *which MCP server* handles a ticket — that's the harness |
+| **MCP Catalog & Enablement** | MCP server listings/versions/manifests, per-workspace installations, pinning, health | Running MCP servers |
+| **RBAC / Policy** | Human roles; agent profiles' permitted MCP servers, tools, projects, fields, and budgets | Anything the harness does internally |
+| **Meridian MCP Server** | The tool surface the harness uses to read and mutate tickets — the *only* programmatic write path for agents | Business rules (delegates to Core + Workflow Engine) |
+| **ROI & Analytics** | Cost/time per execution leg, MCP call costs, baselines, rollups | Billing settlement |
+| **Notifications** | Fan-out to in-app/email/Slack/webhook, digesting | Message authorship (derives from events) |
+| **Web UI** | Timeline, board, backlog, ticket detail, MCP catalog admin, ROI dashboards | Server-side state |
 
-This is a **modular monolith at MVP**, split into these services as separately deployable units
-only when scale requires it — see [ADR-0001](adr/0001-modular-monolith-vs-microservices.md). The
-module boundaries above are enforced in code from day one (no cross-module direct DB access)
-specifically so the later split is a deployment change, not a rewrite.
+Deployed as a **modular monolith** initially, with boundaries enforced in code so a later split is
+a deployment change — see [ADR-0001](adr/0001-modular-monolith-vs-microservices.md). The Trigger
+Service and the Meridian MCP Server are the two most likely first extractions, because both have
+traffic profiles driven by harness behaviour rather than by human UI use.
 
 ---
 
-## 3. Request Flow: Ticket Assigned to an Agent
+## 3. The Trigger Model
+
+Two independent paths, both supported simultaneously (goal G5 / differentiator D4):
 
 ```mermaid
-sequenceDiagram
-    participant U as PM (Web UI)
-    participant Core as Core PM Service
-    participant Wf as Workflow Engine
-    participant Orch as Agent Orchestrator
-    participant Agent as Installed Agent (external process)
-    participant Roi as ROI Service
-    participant Collab as Realtime Service
-
-    U->>Core: assign(ticket, agent_installation_id)
-    Core->>Wf: validate transition (status -> "Assigned")
-    Wf-->>Core: ok
-    Core->>Core: append ActivityEvent(assigned)
-    Core->>Orch: dispatch(ticket_snapshot, agent_installation_id)
-    Orch->>Agent: POST /v1/runs {ticket payload, budget, deadline}
-    Agent-->>Orch: 202 Accepted {run_id}
-    Orch->>Core: status -> "In Progress"
-    Core->>Collab: broadcast(ticket updated)
-    Agent-->>Orch: webhook: run.completed {artifacts, cost, tokens}
-    Orch->>Core: apply artifacts, status -> "In Review"
-    Orch->>Roi: record CostEntry(run_id, cost, duration)
-    Core->>Collab: broadcast(ticket updated)
-    Collab-->>U: live update
+flowchart LR
+    subgraph EventPath["Event-driven"]
+        E1[Ticket mutation] --> E2[ActivityEvent emitted]
+        E2 --> E3{Matches a TriggerRule?}
+        E3 -->|yes| E4[Notify registered harness<br/>webhook or SSE]
+    end
+    subgraph SchedulePath["Scheduled"]
+        S1[Cron per TriggerRule] --> S2["harness calls tickets.query(filter)"]
+        S2 --> S3[Returns matching, unclaimed tickets]
+    end
+    E4 --> Claim
+    S3 --> Claim[harness calls tickets.claim]
+    Claim --> Work[Harness works the ticket]
 ```
 
-The same shape handles **handoff** (the webhook is `run.handoff` instead of `run.completed`,
-targeting a different agent installation) and **ask-human** (`run.blocked`, which pauses the run
-and creates a HITL prompt instead of a status transition) — see
-[`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md) and
-[`human-ai-collaboration.md`](03-components/human-ai-collaboration.md).
+They are deliberately **not** primary-and-fallback. The event path gives low latency (an incident
+raised at 02:00 gets a first response in seconds). The scheduled path gives **completeness** — it
+re-queries the filter criteria from scratch, so a ticket whose event was lost to a harness outage,
+a network partition, or a rule added *after* the ticket was created is still picked up. Systems
+that rely on events alone accumulate silently-stranded work; the sweep is what makes the set of
+worked tickets equal the set of matching tickets.
+
+Claim/lease semantics (see [`agent-harness.md`](03-components/agent-harness.md) §4) are what keep
+the two paths from double-working the same ticket.
 
 ---
 
-## 4. Data Ownership and the Event Log
+## 4. Who Decides What
 
-All ticket mutation flows through Core PM Service, which is the **only** writer to the ticket
-table and the **only** writer to the append-only `activity_event` table (see
-[ADR-0003](adr/0003-event-sourced-ticket-activity.md)). The Agent Orchestrator, ROI Service, and
-Collaboration Service never write ticket state directly — they call Core's internal API, so there
-is exactly one code path that can produce a ticket mutation, and exactly one place workflow
-validation and event emission happen. This is the same principle a payments system applies to its
-ledger: many services *propose* changes, one service *commits* them.
+A recurring source of confusion in agent platforms is *where* routing intelligence lives. Meridian
+splits it explicitly:
+
+| Decision | Made by | Why there |
+|---|---|---|
+| Which tickets are eligible for automation | **Meridian** (TriggerRule filter criteria) | It's a policy/planning decision a PM owns, and it must be inspectable in the UI |
+| Which agent profile handles a ticket | **Meridian** (assignment, or a trigger rule's default profile) | It's an assignment — the same act as assigning a human |
+| Which MCP servers that profile *may* call | **Meridian** (RBAC) | Security boundary; must be enforced server-side regardless of harness behaviour |
+| Which MCP server/tool to *actually* call for this ticket | **The harness** | It's a reasoning decision requiring the ticket's content; this is exactly what the harness is for (D5, [ADR-0007](adr/0007-harness-owned-routing.md)) |
+| Whether the resulting state change is legal | **Meridian** (Workflow Engine) | An agent must obey the same status graph as a human |
+
+The harness has latitude *within* a boundary Meridian sets. It cannot widen that boundary by
+reasoning about it.
 
 ---
 
-## 5. Deployment Shape (indicative)
+## 5. Data Ownership
 
-- **API layer:** REST + WebSocket gateway in front of the modules above (single deployable at
-  MVP).
-- **Datastore:** relational database (Postgres) for all core entities; the `activity_event` table
-  is append-only and the source of truth for ticket history — current ticket state is a projection
-  of it, materialized synchronously on write for read performance (see
-  [`02-data-model.md`](02-data-model.md)).
-- **Queue:** durable job queue (e.g., BullMQ/Redis or SQS-equivalent) for agent dispatch,
-  notification fan-out, and ROI rollup computation — anything that shouldn't block the request
-  path.
-- **Realtime:** WebSocket layer backed by a pub/sub broker for multi-instance fan-out.
-- **Agent connectivity:** outbound HTTP calls to agent-hosted endpoints, plus inbound webhook
-  receivers per agent installation, authenticated with per-installation signing secrets.
+Core Service is the only writer to the ticket tables and the only writer to the append-only
+`activity_event` table (see [ADR-0003](adr/0003-event-sourced-ticket-activity.md)). The Meridian
+MCP Server, the Trigger Service, and the ROI Service all mutate state by calling Core's internal
+API — so there is exactly one code path where workflow validation, permission checks, and event
+emission happen, whether the caller is a human clicking a button or a harness calling an MCP tool.
 
-Full topology, scaling, and environment breakdown is intentionally deferred to an implementation
-phase — this doc fixes the module boundaries and data ownership rules that make that a later,
-low-risk decision.
+Every MCP call the harness makes on a ticket's behalf is additionally recorded as an
+`McpCallRecord` (see [`02-data-model.md`](02-data-model.md) §4) — this is what makes "which server
+did the agent actually call, with what arguments, and what did it cost" answerable after the fact,
+which both the audit story (G11) and the ROI story (G10) depend on.
+
+---
+
+## 6. Deployment Shape (indicative)
+
+- **API layer:** REST + WebSocket for the UI; a separate MCP endpoint (streamable HTTP) for
+  harnesses.
+- **Datastore:** Postgres. `activity_event` and `mcp_call_record` are append-only; current ticket
+  state is a synchronously-maintained projection.
+- **Queue:** durable job queue for scheduled sweeps, notification fan-out, and ROI rollups.
+- **Realtime:** WebSocket + pub/sub for live timeline/board updates and presence.
+- **Harness connectivity:** harnesses register (see [`04-api-contracts.md`](04-api-contracts.md)
+  §4), authenticate per agent profile, and receive events by webhook or SSE. MCP servers are
+  reached **by the harness**, not by Meridian — Meridian never proxies tool traffic, it only
+  governs which servers are permitted.

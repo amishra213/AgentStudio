@@ -40,6 +40,6 @@ dashboard-query time, so historical rollups stay stable even if, e.g., an agent'
   [`roi-analytics.md`](../03-components/roi-analytics.md) §6) degrades that ticket's attribution
   precision, which is surfaced explicitly rather than silently averaged over.
 - Marketplace-level agent trust signals (aggregate ROI contribution per agent, per
-  [`agent-marketplace.md`](../03-components/agent-marketplace.md) §5) can be computed by summing
+  [`mcp-marketplace.md`](../03-components/mcp-marketplace.md) §5) can be computed by summing
   `cost_share`-weighted savings per agent across all tickets it touched, with the reconciliation
   guarantee from this ADR making that sum meaningful rather than double-counted.

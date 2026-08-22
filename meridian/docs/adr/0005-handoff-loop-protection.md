@@ -14,7 +14,7 @@ alone would matter.
 
 ## Decision
 Layer four independent checks at every handoff, per
-[`agent-execution-and-handoff.md`](../03-components/agent-execution-and-handoff.md) §5, any one of
+[`agent-harness.md`](../03-components/agent-harness.md) §7, any one of
 which is sufficient to force escalation to a human:
 
 1. **Hop ceiling** (default 5) — bounds chain length outright.

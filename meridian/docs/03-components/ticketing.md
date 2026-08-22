@@ -1,106 +1,118 @@
 # Component: Ticketing
 
-> Builds on [`02-data-model.md`](../02-data-model.md) (`Ticket`, `Workflow`, `Status`, `TicketLink`, `Comment`).
+> Differentiator **D2** — issues, problems, incidents and changes as first-class ticket types on
+> the same timeline. Builds on [`02-data-model.md`](../02-data-model.md).
 
 ---
 
-## 1. Ticket Types
+## 1. Ticket Types Span Delivery and Operations
 
-Every project ships with a default set (`Epic`, `Story`, `Task`, `Bug`, `Spike`), but ticket types
-are configuration, not code: a project can define a custom type (e.g., `Contract Review`,
-`Support Case`) with its own field schema and its own `Workflow`. This is what lets Meridian serve
-software delivery, legal ops, and customer support inside the same platform (per overview G8).
+A `TicketType` is configuration: a field schema, a workflow, a timeline render mode, an SLA policy,
+and an agent I/O contract. The shipped defaults cover three categories:
 
-A ticket type declares:
+| Category | Types | Notable fields | Timeline render |
+|---|---|---|---|
+| `delivery` | Epic, Story, Task, Defect | estimate, acceptance criteria | Band / Bar |
+| `operational` | **Incident**, **Problem**, **Change** | severity, detected_at, service, change_window, rollback_plan | Point (Incident/Problem), Bar (Change) |
+| `governance` | Risk, Decision, Milestone | probability, impact, decision_date | Bar / Diamond |
 
-| Aspect | Example |
-|---|---|
-| Field schema | `Bug` adds `severity`, `repro_steps`; `Contract Review` adds `counterparty`, `contract_value` |
-| Default workflow | which `Workflow` (status graph) new tickets of this type start in |
-| Agent contract | the shape of input an agent receives and output it must produce for this type — see [`agent-execution-and-handoff.md`](agent-execution-and-handoff.md) §2 |
-| Estimate unit | story points, hours, or none |
+Keeping these in one entity — rather than in a separate service-desk product with its own data
+model — is what makes the shared timeline possible, and it is what lets an incident's follow-up
+work be an ordinary child task in the same sprint as feature work, rather than a linked record in
+a different system that nobody's timeline shows.
+
+### Operational semantics
+
+The ITSM relationships are ordinary `TicketLink` relations:
+
+- Many **Incidents** `caused_by` one **Problem**.
+- A **Problem** is `resolved_by` a **Change**.
+- A **Change** `implements` one or more delivery tickets.
+
+Incidents carry an `sla_policy` (response and resolution targets). SLA clocks pause while the
+ticket is in a `blocked`-category status (e.g. awaiting customer) and resume on return — the
+distinction between elapsed time and *accountable* time being the thing SLA reporting lives or
+dies on.
 
 ---
 
-## 2. The Status Graph (Workflow)
+## 2. The Status Graph
 
-A `Workflow` is a directed graph of `Status` nodes, configured per project per ticket type — not
-a fixed enum. This is deliberate: a support queue's states (`New → Triaged → In Progress →
-Waiting on Customer → Resolved`) look nothing like a software delivery pipeline's
-(`Backlog → Ready → In Progress → In Review → Blocked → Done`), and forcing one shape onto both
-produces the awkward "everything is secretly Done or Not Done" tracker teams route around with
-labels.
+Each ticket type has a `Workflow`: a directed graph of statuses, configurable per project. A
+support queue and a delivery pipeline need genuinely different states, and forcing one shape onto
+both is what drives teams to encode real status in labels.
 
 ```mermaid
 stateDiagram-v2
-    Backlog --> Ready
-    Ready --> InProgress: assigned
-    InProgress --> InReview: work submitted
-    InProgress --> NeedsInput: agent ask-human
-    NeedsInput --> InProgress: human answers
-    InProgress --> Blocked: external blocker
-    Blocked --> InProgress: unblocked
-    InReview --> InProgress: changes requested
-    InReview --> Done: approved
+    direction LR
+    state "Incident workflow" as I {
+        New --> Triaged
+        Triaged --> Investigating
+        Investigating --> AwaitingCustomer
+        AwaitingCustomer --> Investigating
+        Investigating --> Mitigated
+        Mitigated --> Resolved
+        Resolved --> Closed
+    }
 ```
 
-Each `Status` carries a fixed `category` (`not_started` / `active` / `blocked` / `done`) alongside
-its custom `name`, so cross-project reporting, burndown, and ROI cycle-time computation never need
-to know the project's specific status names — see [`02-data-model.md`](../02-data-model.md) §5.
+Every status carries a fixed `category` (`not_started`, `active`, `blocked`, `done`, `cancelled`)
+alongside its custom name, so timeline colouring, burndown, SLA pause logic, and ROI cycle-time all
+work without knowing project-specific names.
 
-**Transition validation** happens once, in the Workflow Engine, regardless of whether the actor
-requesting the transition is a human clicking a dropdown or an agent's Orchestrator-mediated
-status update. An agent cannot skip straight to `Done` if the graph requires passing through
-`In Review` — the same rule a human is held to.
+**Transitions are validated in one place** — the Workflow Engine — regardless of whether the
+requester is a human clicking a dropdown or the harness calling `tickets.update_status` over MCP.
+An agent cannot skip a required review state any more than a person can.
 
----
-
-## 3. Linking
-
-`TicketLink` relations (`blocks`, `blocked_by`, `relates_to`, `duplicates`, `caused_by`) are
-symmetric-aware: creating `A blocks B` automatically materializes `B blocked_by A` for query
-convenience, but both rows point at one logical link so there is one thing to delete.
-
-`blocks`/`blocked_by` links feed directly into the timeline's dependency arrows
-(see [`timeline-and-sprints.md`](timeline-and-sprints.md) §2) and into agent dispatch: the
-Orchestrator will not dispatch a ticket to an agent while it has an unresolved `blocked_by` link
-in the `blocked` status category, avoiding wasted agent runs on work that isn't actually ready.
+A status may set `approval_role`, requiring a named role to approve entry. This is the per-ticket
+analogue of a phase Gate, and it's the mechanism behind agent output requiring human sign-off (see
+[`human-ai-collaboration.md`](human-ai-collaboration.md) §2).
 
 ---
 
-## 4. Automations
+## 3. Automations
 
-Each `Status` can declare `on_enter`/`on_exit` automations, evaluated by the Workflow Engine:
+`on_enter` / `on_exit` actions from a fixed vocabulary, executed by the Workflow Engine:
 
-| Trigger | Example action |
+| Trigger | Action |
 |---|---|
-| `on_enter: NeedsInput` | notify the ticket's human owner or watchers; start a response-time SLA clock |
-| `on_enter: Done` | trigger `RoiSummary` computation for the ticket |
-| `on_enter: InProgress` (agent-assigned) | dispatch to the Agent Orchestrator |
-| `on_exit: Blocked` | log time-in-blocked as a metric feeding cycle-time analytics |
+| `on_enter: Triaged` | Evaluate TriggerRules — may make the ticket eligible for agent pickup |
+| `on_enter: AwaitingCustomer` | Pause SLA clock; notify watchers |
+| `on_enter: Done` | Compute `RoiSummary` |
+| `on_exit: Blocked` | Record time-in-blocked for cycle-time analytics |
 
-Automations are configuration (trigger → action pairs from a fixed action vocabulary), not
-arbitrary scripts — this keeps them auditable and keeps the Workflow Engine the single place
-transition side effects are defined, rather than scattered across UI code.
-
----
-
-## 5. Comments as Structured Collaboration, Not Just Text
-
-A `Comment.kind` (`note`, `question`, `proposal`, `answer`, `system`) lets the UI render an agent's
-structured contribution distinctly from a human's freeform note — a `proposal` comment from an
-agent renders with accept/reject/edit affordances inline, rather than as inert text. This is the
-mechanism `human-ai-collaboration.md` builds the ask-human and co-authoring flows on top of.
+Automations are configuration, not scripts — auditable, and keeping transition side effects in one
+place rather than scattered across UI and integration code.
 
 ---
 
-## 6. Bulk Operations and Views
+## 4. Links and Hierarchy
 
-- **Board view** groups tickets by `Status.category` within a project or sprint (Kanban-style),
-  usable regardless of methodology.
-- **Backlog view** is a flat, priority-ordered list, filterable by type/label/assignee-type
-  (human/agent/unassigned) — the assignee-type filter is what lets a PM see "everything currently
-  sitting with an agent" at a glance.
-- **Saved filters** (JQL-equivalent query language) scope any of the above by arbitrary field
-  combinations, including agent-specific fields like `execution_trail.length > 1` ("tickets that
-  have been handed off at least once") for spotting agents that are mis-scoped.
+`parent_id` gives hierarchy (epic → story → task, or WBS nesting within a phase).
+`TicketLink` gives lateral relations. `blocks`/`blocked_by` do double duty: they draw dependency
+arrows on the timeline **and** they gate agent dispatch — the harness will not be handed a ticket
+whose blockers are unresolved, which avoids burning agent budget on work that isn't actually ready.
+
+---
+
+## 5. Comments as Structured Collaboration
+
+`Comment.kind` distinguishes an agent's `proposal` (rendered with accept / edit / reject
+affordances) from a `question` (an ask-human, which changes ticket status and starts an SLA clock),
+an `answer`, a plain `note`, and `system` entries. This typing is what lets the same thread serve
+as both a human conversation and the agent interaction protocol surface, instead of bolting a
+separate "AI panel" onto the ticket.
+
+---
+
+## 6. Views
+
+- **Timeline** — primary; see [`timeline.md`](timeline.md).
+- **Board** — grouped by status, WIP limits in kanban mode.
+- **Backlog** — flat, priority-ordered, filterable by assignee type (human / agent / both /
+  unassigned).
+- **Queue** — SLA-ordered view for operational types, showing time-to-breach.
+- **Saved filters** — a query language over any field, including execution-trail properties like
+  `hops > 1` (tickets that have been handed off, a useful signal that an agent profile is
+  mis-scoped) or `last_leg_outcome = policy_denied` (tickets an agent couldn't finish because it
+  lacked an MCP grant).

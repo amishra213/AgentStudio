@@ -1,57 +1,78 @@
 # Component: Notifications & Integrations
 
-> Builds on [`02-data-model.md`](../02-data-model.md) (`ActivityEvent` is the source every notification is derived from).
+> Builds on [`02-data-model.md`](../02-data-model.md) — `ActivityEvent` is the source every
+> notification derives from — and honours the visibility rules in
+> [`permissions-rbac.md`](permissions-rbac.md) §7.
 
 ---
 
-## 1. Notifications Are Derived From the Event Log, Not Authored Separately
+## 1. Derived From the Event Log
 
-Every notification traces back to an `ActivityEvent` (see [`02-data-model.md`](../02-data-model.md)
-§2). The Notification Service subscribes to the event stream and applies per-user, per-project
-preferences to decide fan-out — there is no second code path that "also" sends a Slack message on
-assignment; assignment produces one event, and the Notification Service decides who hears about it
-and how. This keeps notification content trustworthy (it can never say something the audit log
-disagrees with) and keeps adding a new channel (e.g., Teams) a matter of adding a new fan-out
-target, not a new event-emission call scattered through the codebase.
+Every notification traces back to an `ActivityEvent`. The Notification Service subscribes to the
+event stream and applies per-user, per-project preferences to decide fan-out. There is no second
+code path that "also" sends a Slack message on assignment — assignment produces one event, and the
+service decides who hears about it and how.
+
+Two benefits: notification content can never contradict the audit log, and adding a channel is a
+new fan-out target rather than new emission calls scattered through the codebase.
 
 ---
 
-## 2. Channels
+## 2. Visibility Is Applied Before Fan-Out
 
-| Channel | Trigger examples | Notes |
+A notification is a leak path, so the visibility predicate runs **before** delivery, not after:
+
+- A recipient without access to a ticket receives **nothing** — the notification is suppressed
+  entirely rather than sent as a redacted stub, since "OPS-203 was updated" already discloses that
+  the ticket exists.
+- Fields of `sensitivity: restricted`/`secret` are omitted from previews even for recipients who
+  can see the ticket, because email and push previews land on lock screens and in inboxes outside
+  the org's control.
+- Deep links resolve against the recipient's own permissions at click time, so access revoked
+  between send and click is honoured.
+
+---
+
+## 3. Channels
+
+| Channel | Typical triggers | Notes |
 |---|---|---|
-| In-app | All events relevant to the user (assigned, mentioned, ask-human on their ticket) | Always on; the only channel with no user opt-out |
-| Email | Digested (default: hourly) or immediate for `NeedsInput`/SLA-risk events | Per-user frequency preference |
-| Slack | Configurable per-project channel mapping (e.g., ticket events in `#eng-project-x`) | Two-way: replying in the Slack thread posts a `Comment` back on the ticket, including answering an ask-human question from Slack |
-| Webhook | Arbitrary workspace-configured HTTP endpoint | For custom integrations not covered below |
-| Push (mobile, future) | High-urgency only (`NeedsInput` SLA breach, budget ceiling hit) | Deferred to a later phase |
+| In-app | Everything relevant to the user | Always on; the only channel without opt-out |
+| Email | Digested (default hourly), immediate for ask-human and SLA-risk | Per-user frequency preference |
+| Slack | Project→channel mapping | **Bi-directional**: thread replies post comments, including answering an agent's ask-human without leaving Slack |
+| Webhook | Workspace-configured endpoint | For custom downstream integrations |
+| Push | High-urgency only — SLA breach, budget ceiling hit, P1 incident | Preview text is visibility-filtered per §2 |
 
 ---
 
-## 3. Inbound Integrations
+## 4. Inbound Integrations
 
 | Integration | Direction | Purpose |
 |---|---|---|
-| **Email-to-ticket** | Inbound | A configured project inbox address creates a new ticket from an incoming email (subject → title, body → description); used heavily by support/consulting-style projects |
-| **Slack** | Bi-directional | `/meridian create` slash command creates a ticket; thread replies post comments; also the ask-human answer channel (§2) |
-| **GitHub / GitLab** | Bi-directional | Link a ticket to a PR/commit; PR merge can auto-transition a ticket's status (configurable automation, per [`ticketing.md`](ticketing.md) §4); PR review comments can optionally mirror into ticket comments |
-| **Calendar** | Outbound | Sprint start/end and milestone dates can publish to a calendar feed (ICS) for stakeholders who live in their calendar, not the tool |
-| **SSO / IdP** | Inbound (auth) | SAML/OIDC for workspace login; group mappings can drive default project role assignment |
+| **Email-to-ticket** | In | A project inbox address creates tickets from email — the standard path for incidents and support cases. Content is marked as externally-sourced provenance ([`06-security.md`](../06-security.md) §4) |
+| **Slack** | Both | `/meridian create`; thread replies as comments; ask-human answers |
+| **Monitoring / alerting** | In | Alert webhooks create `incident` tickets, which then match event trigger rules for immediate agent triage |
+| **GitHub / GitLab** | Both | Link tickets to PRs and commits; a merge can auto-transition status via a configured automation |
+| **Calendar (ICS)** | Out | Sprint boundaries, phase dates, and gate dates for stakeholders who live in a calendar |
+| **SSO / IdP** | In | SAML/OIDC login; group mappings seed project roles at project creation ([`project-administration.md`](project-administration.md) §1) |
 
-None of these integrations bypass the Workflow Engine or the permission model — a GitHub-triggered
-status transition is validated by the same Workflow Engine as a human clicking a button, and an
-email-created ticket is subject to the same field schema and workflow as one created in the UI.
+No integration bypasses the Workflow Engine or the permission model: a merge-triggered transition
+is validated exactly like a human's click, and an email-created ticket is subject to the same field
+schema, workflow, and `VisibilityRule`s as one created in the UI.
 
 ---
 
-## 4. Digesting and De-duplication
+## 5. Digesting and Noise Control
 
-To avoid an agent-heavy project drowning humans in notifications (an agent can generate many
-events quickly), the Notification Service:
+An agent-heavy project can generate events far faster than a human can read them, so the service:
 
-- De-duplicates repeated events of the same type on the same ticket within a short window into one
-  notification ("3 status changes on ENG-142 in the last 2 minutes" collapses to one line).
-- Applies a **noise budget** per user per project — routine agent progress events (leg started,
-  intermediate artifact posted) are in-app only by default; only terminal states (`blocked`,
-  `handoff` to a human, `completed` on a human-owned ticket) escalate to email/Slack by default.
-  Users can widen this per project if they want more visibility.
+- **De-duplicates** repeated event types on one ticket within a short window into a single
+  notification.
+- Applies a **noise budget** per user per project: routine agent progress (leg started, MCP call
+  made, intermediate artifact posted) is in-app only by default; only terminal or
+  attention-requiring states — ask-human, handoff to a human, completion on a human-owned ticket,
+  budget thresholds, SLA risk — escalate to email/Slack/push.
+
+The default is deliberately quiet. An automation platform that notifies on every agent action
+trains people to ignore it, which defeats the ask-human path that actually needs a fast human
+response.

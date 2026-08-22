@@ -8,7 +8,7 @@ A ticket's current state (status, assignee, fields) needs to be queried cheaply 
 board render). Its **history** needs to be complete, ordered, and immutable — for audit
 (overview G7), for ROI cycle-time computation (time-in-status per leg), and for reconstructing why
 an automated decision happened (e.g., a handoff-loop escalation, per
-[`agent-execution-and-handoff.md`](../03-components/agent-execution-and-handoff.md) §5). A
+[`agent-harness.md`](../03-components/agent-harness.md) §7). A
 mutable-row-with-an-audit-log-on-the-side design tends to let the two drift — an audit log that's a
 side effect of a mutation is easy to accidentally skip in one code path.
 

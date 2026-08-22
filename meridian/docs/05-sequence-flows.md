@@ -1,94 +1,162 @@
 # Sequence Flows
 
-> Worked end-to-end examples tying together the components in `03-components/`. Each flow
-> references the specific docs/entities it exercises.
+> Worked examples tying the components together. Each references the docs it exercises.
 
 ---
 
-## Flow 1 — Ticket Created by a PM, Auto-Assigned to an Agent
+## Flow 1 — Event-Triggered Incident, First Response in Seconds
 
-Exercises: [`ticketing.md`](03-components/ticketing.md), [`agent-marketplace.md`](03-components/agent-marketplace.md), [`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md).
+Exercises [`agent-harness.md`](03-components/agent-harness.md) §2, [`ticketing.md`](03-components/ticketing.md), [`permissions-rbac.md`](03-components/permissions-rbac.md) §3.
+
+```mermaid
+sequenceDiagram
+    participant Mon as Monitoring (email-to-ticket)
+    participant Core
+    participant Trig as Trigger Service
+    participant H as Harness
+    participant MM as Meridian MCP
+    participant ITSM as ITSM MCP server
+
+    Mon->>Core: creates Incident OPS-142 (P1, status New)
+    Core->>Core: VisibilityRule → restricted, granted to security group
+    Core->>Trig: ActivityEvent(created)
+    Trig->>Trig: matches "Auto-triage P1 incidents"
+    Trig->>H: event: ticket.matched_rule {ticket_id, profile}
+    H->>MM: tickets.get + tickets.claim
+    MM-->>H: payload (fields filtered) + lease_token
+    H->>MM: capabilities.list
+    MM-->>H: granted servers: ITSM(read), Knowledge(read)
+    H->>ITSM: search_similar_incidents
+    ITSM-->>H: 3 prior matches
+    H->>MM: tickets.comment(proposal: probable cause + runbook)
+    H->>MM: tickets.update_status(Triaged)
+    H->>MM: usage.report(tokens, cache, cost)
+    H->>MM: tickets.complete + release_claim
+```
+
+---
+
+## Flow 2 — Scheduled Sweep Catches What the Event Missed
+
+Exercises [`agent-harness.md`](03-components/agent-harness.md) §2 and §4.
+
+```mermaid
+sequenceDiagram
+    participant Core
+    participant H as Harness
+    participant MM as Meridian MCP
+
+    Note over H: Harness was down 02:00–02:20; its event was lost
+    Core->>Core: OPS-155 created 02:05, no pickup
+    Note over H: 02:25 — cron fires for rule "Auto-triage P1"
+    H->>MM: tickets.query(filter, claimable_only=true)
+    MM-->>H: [OPS-155]  ← still matching, still unclaimed
+    H->>MM: tickets.claim(OPS-155)
+    Note over H: works normally from here
+```
+
+The sweep re-evaluates the filter from scratch, so completeness does not depend on any event
+having been delivered. This is also the path that picks up tickets whose eligibility changed
+without emitting an event — an SLA clock crossing a threshold, or a blocker resolving elsewhere.
+
+---
+
+## Flow 3 — Handoff Because of a Missing MCP Grant
+
+Exercises [`agent-harness.md`](03-components/agent-harness.md) §5 and §7, [`permissions-rbac.md`](03-components/permissions-rbac.md) §3.
+
+```mermaid
+sequenceDiagram
+    participant H as Harness (Triage profile)
+    participant MM as Meridian MCP
+    participant H2 as Harness (Change Exec profile)
+
+    H->>MM: capabilities.list
+    MM-->>H: ITSM(read), Knowledge(read)
+    Note over H: fix requires a config change;<br/>no grant for the deployment server
+    H->>MM: tickets.handoff {reason: missing_mcp_grant,<br/>suggested_tags: ["change-execution"]}
+    MM->>MM: route → "Change Executor" profile; hop=1, budget ok
+    MM->>H2: event: ticket.matched (new leg)
+    H2->>MM: capabilities.list
+    MM-->>H2: Deploy MCP (write_external, requires_approval)
+    H2->>MM: tool call → approval gate
+    MM-->>H2: awaiting human approval
+```
+
+Handing off on a missing grant is the designed behaviour, not a failure: the agent reasoned
+correctly and stopped at its policy boundary.
+
+---
+
+## Flow 4 — Budget Threshold Stops Dispatch
+
+Exercises [`roi-analytics.md`](03-components/roi-analytics.md) §7.
+
+```mermaid
+sequenceDiagram
+    participant H as Harness
+    participant MM as Meridian MCP
+    participant Roi as ROI Service
+    participant PM
+
+    H->>MM: usage.report(leg costs)
+    MM->>Roi: append UsageRecord + CostEntry
+    Roi->>Roi: sprint budget now at 96% (threshold 0.95)
+    Roi->>PM: notify: budget threshold crossed
+    Roi->>MM: set sprint budget state = block_agent_dispatch
+    H->>MM: tickets.claim(next ticket)
+    MM-->>H: error budget_exceeded — dispatch blocked
+    Note over PM: PM raises the ceiling or defers work;<br/>humans continue unaffected
+```
+
+---
+
+## Flow 5 — Waterfall Gate Blocking a Downstream Phase
+
+Exercises [`delivery-modes.md`](03-components/delivery-modes.md) §2, [`timeline.md`](03-components/timeline.md) §4.
 
 ```mermaid
 sequenceDiagram
     participant PM
     participant Core
     participant Wf as Workflow Engine
-    participant Orch as Orchestrator
-    participant Agent
 
-    PM->>Core: create ticket (type=Bug, labels=[frontend])
-    Core->>Wf: initialize status = Backlog
-    PM->>Core: move to Ready
-    Core->>Wf: validate + apply automation "auto-assign by capability_tags"
-    Wf->>Core: assign(agent_installation matching "frontend")
-    Core->>Orch: dispatch
-    Orch->>Agent: POST /v1/runs
-    Agent-->>Orch: 202 accepted
-    Core->>Core: status -> InProgress
-    Agent-->>Orch: run-completed {artifacts, cost}
-    Orch->>Core: apply artifacts, status -> InReview
-    Core->>Core: RoiBaseline check pending review approval before Done
+    Note over Core: Build phase due to start; "Design Sign-off" gate still pending
+    Core->>Core: at-risk flag on Build phase + downstream milestones
+    PM->>Core: attempts to move a Build ticket to In Progress
+    Core->>Wf: validate transition
+    Wf-->>Core: rejected — blocking gate unapproved
+    PM->>Core: gate decision = approved (approver_role satisfied)
+    Core->>Core: ActivityEvent(gate_decided); at-risk cleared
+    PM->>Core: transition now succeeds
 ```
 
 ---
 
-## Flow 2 — Multi-Agent Handoff Ending in Ask-Human
+## Flow 6 — Co-Assigned Ticket With Human Sign-off
 
-Exercises: [`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md) §3–6, [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) §3.
+Exercises [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) §2–4.
 
 ```mermaid
 sequenceDiagram
-    participant AgentA as Drafting Agent
-    participant Orch
-    participant AgentB as Legal Review Agent
-    participant Human as Consultant
+    participant H as Harness (agent = owner)
+    participant MM as Meridian MCP
+    participant Rev as Human (reviewer)
 
-    Orch->>AgentA: dispatch (leg 1)
-    AgentA-->>Orch: run-handoff {reason: needs_different_capability, tags: [legal-review]}
-    Orch->>Orch: match capability_tags -> AgentB, hop_count=1 (ok), budget check (ok)
-    Orch->>AgentB: dispatch (leg 2), context_bundle from leg 1
-    AgentB-->>Orch: run-blocked {question: "Is this clause enforceable in NY?"}
-    Orch->>Core: status -> NeedsInput, post question Comment, notify Human
-    Human->>Core: post answer Comment
-    Core->>Orch: resume(run_id, answer)
-    Orch->>AgentB: POST /v1/runs/{run_id}/resume
-    AgentB-->>Orch: run-completed {artifacts}
-    Orch->>Core: apply artifacts, status -> InReview
-```
-
-Note leg 2 is a single `ExecutionLeg` spanning the block/resume — the ask-human round trip does not
-create a new hop (per [`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md) §6).
-
----
-
-## Flow 3 — Handoff Loop Detected, Escalated
-
-Exercises: [ADR-0005](adr/0005-handoff-loop-protection.md), [`agent-execution-and-handoff.md`](03-components/agent-execution-and-handoff.md) §5.
-
-```mermaid
-sequenceDiagram
-    participant AgentA
-    participant Orch
-    participant AgentB
-    participant PM
-
-    Orch->>AgentA: dispatch (leg 1)
-    AgentA-->>Orch: handoff -> AgentB (hop=1)
-    Orch->>AgentB: dispatch (leg 2)
-    AgentB-->>Orch: handoff -> AgentA (hop=2)
-    Orch->>Orch: cycle check: AgentA already in trail -> allow once
-    Orch->>AgentA: dispatch (leg 3)
-    AgentA-->>Orch: handoff -> AgentB (hop=3)
-    Orch->>Orch: cycle check: AgentB repeat AND hop=3 -> escalate
-    Orch->>PM: assign ticket, status -> NeedsInput, system comment: "Handoff loop detected between Agent A and Agent B after 3 hops"
+    H->>MM: tickets.comment(proposal: drafted change plan)
+    H->>MM: tickets.update_status(In Review)
+    MM-->>Rev: notification
+    Rev->>MM: edits the proposal (new version, linked to original)
+    Rev->>MM: approves → Done (Status.approval_role satisfied)
+    MM->>MM: RoiSummary: cost/time split across agent leg + human review leg
+    MM->>MM: edit distance recorded → profile quality signal
 ```
 
 ---
 
-## Flow 4 — Sprint Close and ROI Rollup
+## Flow 7 — Sprint Close, Rollup, and Project ROI
 
-Exercises: [`timeline-and-sprints.md`](03-components/timeline-and-sprints.md) §3, [`roi-analytics.md`](03-components/roi-analytics.md) §1–4.
+Exercises [`roi-analytics.md`](03-components/roi-analytics.md) §4–6.
 
 ```mermaid
 sequenceDiagram
@@ -97,33 +165,36 @@ sequenceDiagram
     participant Roi as ROI Service
 
     PM->>Core: close sprint
-    Core->>Core: snapshot velocity (points completed)
-    Core->>Roi: compute RoiSummary for every ticket completed in sprint
+    Core->>Core: snapshot velocity; freeze scope
+    Core->>Roi: compute RoiSummary for each completed ticket
     loop each ticket
-        Roi->>Roi: sum CostEntry across ExecutionLegs
-        Roi->>Roi: apply RoiBaseline snapshot
-        Roi->>Roi: compute roi_pct, time_saved, attributed_legs
+        Roi->>Roi: sum UsageRecord → model cost; McpCallRecord → MCP cost; human_time
+        Roi->>Roi: apply baseline snapshot; attribute across legs
     end
-    Roi->>Core: sprint RoiSummary rollup ready
-    Core-->>PM: sprint report: $ saved, hours saved, autonomy_level breakdown
+    Roi->>Roi: UsageRollup(sprint) → EfficiencyMetric(sprint)
+    Roi->>Roi: recompute project rollup from summed totals, not averaged ROI
+    Roi-->>PM: $ saved, hours returned, autonomy mix, cost split, cache hit ratio
 ```
 
 ---
 
-## Flow 5 — Co-Assigned Ticket With Human Override
+## Flow 8 — Confidential Ticket Stays Invisible
 
-Exercises: [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) §2 and §4.
+Exercises [`permissions-rbac.md`](03-components/permissions-rbac.md) §7.
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent (owner)
-    participant Human as Human (reviewer)
-    participant Orch
+    participant Sec as Security lead
     participant Core
+    participant Dev as Contributor (no grant)
+    participant H as Harness (ungranted profile)
 
-    Orch->>Agent: dispatch
-    Agent-->>Core: proposal Comment (draft artifact)
-    Human->>Core: edits proposal directly (creates linked human-authored version)
-    Human->>Core: approves -> status -> Done (approval_role: reviewer satisfied)
-    Core->>Roi: RoiSummary computed; attributed_legs splits cost/time between Agent leg and Human review leg
+    Sec->>Core: create ticket; VisibilityRule → confidential + grant security group
+    Dev->>Core: GET /timeline, /search, /board
+    Core-->>Dev: ticket absent from results, counts, and rollups
+    Dev->>Core: opens a visible ticket linked to it
+    Core-->>Dev: link renders as "restricted item", key hidden
+    H->>Core: tickets.query
+    Core-->>H: ticket not returned — no agent grant
+    Note over Core: audit log retains full detail for admins/auditors
 ```
