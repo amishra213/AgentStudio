@@ -43,6 +43,30 @@ route, and cannot see or request anything outside it.
 | `tickets.reject` | Close the leg as `rejected` with a reason |
 | `usage.report` | Submit `UsageRecord` rows (tokens, cache, model, `harness_step_id`) and MCP call costs for the leg |
 
+---
+
+## 1A. The Mnemos MCP Server *(standalone — separate service)*
+
+Reached by the harness as a granted MCP server like any other, not through Meridian
+([ADR-0008](adr/0008-standalone-memory-module.md)). **Read and write are separate tools so recall
+can be granted without the ability to teach.**
+
+| Tool | Effect class | Purpose |
+|---|---|---|
+| `memory.recall` | `read` | `(query, scope_context, budget_tokens)` → ranked items with provenance, confidence, and any `shadows`/`shadowed_by` relationships. Filtered by caller clearance |
+| `memory.get` | `read` | Fetch one item with full evidence chain |
+| `memory.propose` | `write_internal` | Submit a candidate item; enters validation, never active on write |
+| `memory.contradict` | `write_internal` | Report that a served item was wrong on this ticket — the strongest correction signal available |
+| `memory.suppress` | `write_internal` | Switch off an inherited item at a narrower scope; **reason required** |
+| `memory.curate` | `write_internal` | Human-authored or human-corrected item (UI-facing; rarely granted to agents) |
+
+`scope_context` is `{project_id, ticket_type_id}`; the service resolves the four-tier precedence
+itself rather than making callers assemble it, so scope semantics cannot drift between clients.
+
+Recall responses always carry provenance — an agent acting on a memory must be able to cite why,
+and an auditor must be able to trace a decision back to the ticket that taught it. Token
+consumption is returned so the harness can report it as context cost via `usage.report`.
+
 ### Contract notes
 
 - Every mutating tool requires the `lease_token` from `claim`; a stale token is rejected, so a

@@ -33,6 +33,12 @@ flowchart TD
 Everything in that loop except step **E** and step **F** is a call into Meridian's MCP server.
 Step E is the reasoning Meridian delegates; step F is the work itself.
 
+Where the profile holds a grant for the memory service, step **D** also calls `memory.recall` with
+the ticket's scope context, and terminal outcomes feed the ingestion pipeline. Memory is an ordinary
+granted MCP server, not a special path — see [`memory-module.md`](memory-module.md). A profile
+working externally-sourced tickets should hold recall without `memory.propose`, since that is the
+injection-to-persistence route.
+
 ---
 
 ## 2. Trigger Modes — Events *and* Schedules (D4)

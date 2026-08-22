@@ -195,6 +195,38 @@ Quality signals are all indirect — human edit distance, rejection rate, overri
 the artifact against the ticket's own `acceptance_criteria`. Shadow mode (H1) makes this tractable
 by producing scoreable output cheaply, but the scoring mechanism itself is not designed.
 
+### O10 · Memory aggregation can leak what no single item discloses · *High, partially open*
+Mnemos labels each `MemoryItem` with the clearance of its redacted sources and filters recall
+accordingly. That does not address **aggregation**: several individually non-sensitive facts,
+learned from different tickets, can combine into a sensitive conclusion, and no per-item label
+prevents it. Mitigations in place are minimum evidence diversity before generalisation and
+per-source `restricted_to` inheritance from confidential tickets. Neither is a solution. This is a
+known-hard problem in disclosure control and is not solved here.
+→ [`memory-module.md`](03-components/memory-module.md) §6
+
+### O11 · Memory poisoning is bounded but not eliminated · *High, inherent*
+A single injected ticket that plants a durable memory affects every future ticket in scope — a
+strictly worse version of O1 because it persists. Controls: external-provenance content is excluded
+from extraction by default, promotion above the narrowest scope requires evidence from multiple
+distinct tickets, global promotion requires human review, and `memory.propose` is a separate grant
+from `memory.recall`. A patient adversary with write access to several tickets over time can still
+promote at project scope. Detection (contradiction rate, `staleness_rate`) is the backstop, not
+prevention.
+
+### O12 · Lift measurement needs volume that low-traffic scopes will not have · *Medium*
+[ADR-0009](adr/0009-memory-learns-by-measured-lift.md) makes measured lift the basis of confidence,
+but a 10% holdout on a scope processing thirty tickets a quarter will never reach significance.
+Those scopes inherit the parent scope's estimate and are flagged `lift_unmeasured` — which is honest
+but means the flagship mechanism does not actually operate for a probably-large share of scopes. An
+alternative for the long tail (pooled analysis across similar scopes, or sequential testing) is not
+designed.
+
+### O13 · Memory decay half-lives are unvalidated guesses · *Medium*
+Per-kind half-lives (`fact` slow, `resolution` fast) are asserted from plausibility, not evidence.
+Set too long, the store serves stale workarounds for fixed bugs; too short, it forgets things that
+were durable. The `staleness_rate` metric will eventually reveal the right values, but the initial
+settings are guesses and should be treated as such rather than as defaults worth defending.
+
 ---
 
 ## Structural Observations

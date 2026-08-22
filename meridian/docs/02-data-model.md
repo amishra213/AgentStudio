@@ -409,6 +409,69 @@ are **not** double-counted as `UsageRecord` rows, which are strictly the harness
 
 ---
 
+## 4A. Memory Entities *(Mnemos — separate datastore)*
+
+These live in the standalone memory service, not Meridian's database
+([ADR-0008](adr/0008-standalone-memory-module.md)). They are documented here because Meridian's
+event stream feeds them and its clearance model constrains them, but they are reached only over
+MCP. See [`memory-module.md`](03-components/memory-module.md).
+
+### MemoryItem
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `tenant_id` | uuid | tenancy mirrors the workspace boundary |
+| `scope` | enum | `global`, `project`, `ticket_type` — `ticket_type` may attach globally or within a project, giving four resolution tiers (§3 of the component doc) |
+| `scope_id`, `project_id` | uuid, nullable | |
+| `kind` | enum | `procedure`, `fact`, `preference`, `pitfall`, `entity`, `resolution` |
+| `content` | jsonb + text | structured payload plus rendered prose |
+| `evidence` | Evidence[] | `{source_type, source_id, occurred_at}` — **an item with no evidence cannot be promoted** |
+| `support_count`, `contradiction_count` | integer | |
+| `confidence` | number | from evidence and measured lift only — never model self-report ([ADR-0009](adr/0009-memory-learns-by-measured-lift.md)) |
+| `clearance` | enum | highest sensitivity surviving redaction; filters recall |
+| `restricted_to` | jsonb, nullable | grantee set inherited from a confidential source |
+| `status` | enum | `candidate`, `active`, `contested`, `dormant`, `deprecated`, `suppressed`, `pinned` |
+| `curated_by` | uuid, nullable | human-authored items carry higher default confidence and are exempt from usage decay |
+| `extractor_id`, `extractor_version` | string | attribution for per-extractor yield measurement |
+| `half_life`, `last_used_at`, `last_validated_at` | | decay inputs |
+| `shadows`, `shadowed_by` | uuid[] | cross-scope override relationships, returned with recall rather than hidden |
+| `version`, `superseded_by` | | items are versioned; corrections do not overwrite |
+
+### MemoryScopePolicy
+Pipeline configuration *and* override mode at one scope. Resolved with the same
+most-specific-first precedence as items.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `scope`, `scope_id` | | |
+| `override_mode` | enum | `extend` (default), `replace`, `suppress`, `pin`, `amend` |
+| `selectors` | jsonb | which events are learning-eligible |
+| `redaction_rules` | jsonb | applied **before** extraction |
+| `extractors` | jsonb | enabled extractor ids and weights |
+| `promotion_thresholds` | jsonb | per kind; defaults rise with scope breadth |
+| `recall_budget_tokens` | integer | context cap per recall call |
+| `holdout_pct` | number | share of runs served without recall, for lift measurement |
+| `staleness_window` | duration | unused-item demotion threshold |
+
+### MemorySuppression
+| Field | Type | Notes |
+|---|---|---|
+| `memory_item_id`, `scope`, `scope_id` | | the inherited item switched off here |
+| `reason` | text | **required** — otherwise suppressions accumulate unexplainable |
+| `created_by`, `created_at`, `expires_at` | | |
+
+### MemoryRetrievalRecord *(append-only)*
+The join between memory and outcomes; the input to lift measurement.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `execution_leg_id` | | correlates to the Meridian leg that recalled |
+| `query`, `returned_item_ids` | | |
+| `arm` | enum | `served` or `holdout` — the control assignment |
+| `tokens_consumed` | integer | reported onward as `UsageRecord` context cost |
+| `subsequent_outcome` | enum | leg outcome, joined after the fact |
+
+---
+
 ## 5. ROI Entities
 
 ### WorkingCalendar

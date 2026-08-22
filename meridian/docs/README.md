@@ -19,6 +19,7 @@ concepts it builds on.
    | [`project-administration.md`](03-components/project-administration.md) | Project creation, templates, status definition, tracking configuration |
    | [`mcp-marketplace.md`](03-components/mcp-marketplace.md) | MCP catalog, manifests, effect classes, certification, private registration |
    | [`agent-harness.md`](03-components/agent-harness.md) | Trigger rules, claim/lease, MCP routing, outcomes, handoff, guardrails |
+   | [`memory-module.md`](03-components/memory-module.md) | Mnemos: standalone self-learning memory — scopes, override, ingestion pipeline, decay, measured lift |
    | [`human-ai-collaboration.md`](03-components/human-ai-collaboration.md) | Co-assignment, ask-human, presence, live takeover, feedback signals |
    | [`roi-analytics.md`](03-components/roi-analytics.md) | Token accounting, cost split, efficiency metrics, budgets, ROI at task and project level |
    | [`permissions-rbac.md`](03-components/permissions-rbac.md) | Human roles, the three-layer MCP grant model, ticket visibility management |
@@ -44,6 +45,8 @@ concepts it builds on.
    | [0005](adr/0005-handoff-loop-protection.md) | Four-layer handoff loop protection |
    | [0006](adr/0006-unified-waterfall-and-agile.md) | One model for all four delivery modes |
    | [0007](adr/0007-harness-owned-routing.md) | Harness pulls and routes; Meridian governs |
+   | [0008](adr/0008-standalone-memory-module.md) | Memory is a standalone service consumed over MCP |
+   | [0009](adr/0009-memory-learns-by-measured-lift.md) | Memory confidence comes from measured lift, not usage |
 
 **Document status:** Living design document, no code yet. Intended to be concrete enough that
 implementation can start directly from this tree.

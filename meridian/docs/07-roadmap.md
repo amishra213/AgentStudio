@@ -80,6 +80,20 @@ a scheduled sweep then works matching tickets unattended (SC-3).
 
 **Exit:** a closed sprint and its parent project both produce a defensible $ / hours-saved report (SC-10, SC-11).
 
+## Phase 7A — Mnemos: Self-Learning Memory *(standalone service)*
+Deliberately after cost tracking, because memory's context consumption must be meterable and its
+lift measurable from the day it ships — see [ADR-0009](adr/0009-memory-learns-by-measured-lift.md).
+
+- Memory store, scope resolution (global / project / ticket-type, four tiers), override modes — [`memory-module.md`](03-components/memory-module.md) §2–3.
+- Ingestion pipeline: select → **redact before extract** → extract → normalise → validate → promote → index — §4.
+- Mnemos MCP server with read/write split — [`04-api-contracts.md`](04-api-contracts.md) §1A.
+- Decay, contradiction quarantine, source invalidation — §5.
+- **Retrieval holdout and lift measurement** — §7; a scope with no measurable lift has its budget cut.
+- Human curation and template-seeded cold start — §8.
+
+**Exit:** memory shows measured lift against its own holdout, per scope and per kind, and can
+report where it is not earning its context cost.
+
 ## Phase 8 — Enterprise Hardening
 - `verified` / `enterprise` MCP certification and security review pipeline.
 - Prompt-injection controls: content provenance marking, default-closed grants review — [`06-security.md`](06-security.md) §4.

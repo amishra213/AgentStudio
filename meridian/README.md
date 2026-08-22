@@ -76,6 +76,7 @@ The harness is the only thing that *executes*. Meridian is the only thing that *
 | [`docs/03-components/project-administration.md`](docs/03-components/project-administration.md) | Project creation, templates, status definition, tracking config |
 | [`docs/03-components/mcp-marketplace.md`](docs/03-components/mcp-marketplace.md) | MCP server catalog, manifests, certification, private registration |
 | [`docs/03-components/agent-harness.md`](docs/03-components/agent-harness.md) | Trigger rules, claim/lease, MCP routing, handoff, guardrails |
+| [`docs/03-components/memory-module.md`](docs/03-components/memory-module.md) | Mnemos: standalone self-learning memory with scoped override and measured lift |
 | [`docs/03-components/human-ai-collaboration.md`](docs/03-components/human-ai-collaboration.md) | Co-assignment, ask-human, presence, live takeover |
 | [`docs/03-components/roi-analytics.md`](docs/03-components/roi-analytics.md) | Token accounting, cost split, efficiency metrics, budgets, ROI at task and project level |
 | [`docs/03-components/permissions-rbac.md`](docs/03-components/permissions-rbac.md) | Roles, three-layer MCP grant model, ticket visibility management |
@@ -94,6 +95,8 @@ The harness is the only thing that *executes*. Meridian is the only thing that *
 | [`docs/adr/0005-handoff-loop-protection.md`](docs/adr/0005-handoff-loop-protection.md) | Preventing runaway handoff loops |
 | [`docs/adr/0006-unified-waterfall-and-agile.md`](docs/adr/0006-unified-waterfall-and-agile.md) | One model for both methodologies |
 | [`docs/adr/0007-harness-owned-routing.md`](docs/adr/0007-harness-owned-routing.md) | Harness pulls and routes; Meridian does not push-dispatch |
+| [`docs/adr/0008-standalone-memory-module.md`](docs/adr/0008-standalone-memory-module.md) | Memory is a standalone service consumed over MCP |
+| [`docs/adr/0009-memory-learns-by-measured-lift.md`](docs/adr/0009-memory-learns-by-measured-lift.md) | Memory confidence from measured lift, not usage |
 
 ---
 
