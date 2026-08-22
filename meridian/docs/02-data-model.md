@@ -296,7 +296,23 @@ prompt/policy, and a permitted MCP surface into one named, assignable worker.
 | `accepts_ticket_types` | uuid[] | |
 | `budget` | Budget | `{per_run, per_day, per_ticket}` ceilings enforced before dispatch and on each cost report |
 | `max_hops` | integer | handoff hop ceiling for tickets this profile starts |
-| `status` | enum | `active`, `paused` |
+| `execution_mode` | enum | `shadow`, `propose`, `autonomous` — per project override allowed; see [`agent-harness.md`](03-components/agent-harness.md) §3A |
+| `clearance` | enum | max field `sensitivity` this profile may receive; also gates cross-clearance handoff |
+| `current_version_id` | uuid | see below |
+| `status` | enum | `active`, `paused`, `auto_paused` (circuit breaker, §3C) |
+| `breaker_config` | jsonb | per-condition thresholds overriding defaults |
+
+### AgentProfileVersion
+Created on any change to `model_config`, `system_policy`, `capability_tags`, `clearance`, or
+grants. `ExecutionLeg` references the **version**, so trends compare like with like — see
+[`agent-harness.md`](03-components/agent-harness.md) §3B.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `agent_profile_id`, `version` | | auto-incremented |
+| `snapshot` | jsonb | full config as of this version |
+| `changed_by`, `changed_at`, `change_note` | | |
+| `superseded_at` | timestamp, nullable | |
 
 ### McpGrant
 The RBAC join that answers "may this agent profile call this server, and which of its tools?"
@@ -330,10 +346,18 @@ One actor's unit of work on a ticket — the atom of the execution trail.
 |---|---|---|
 | `id`, `ticket_id`, `sequence` | | |
 | `actor_type`, `actor_id` | | `human` (user) or `agent` (agent profile) |
+| `agent_profile_version_id` | uuid, nullable | which profile version ran — required for trend comparability |
+| `execution_mode` | enum | `shadow` legs never mutate the ticket and are excluded from headline ROI |
 | `harness_run_id` | string, nullable | the harness's own run identifier, for cross-system tracing |
-| `started_at`, `ended_at` | timestamp | |
-| `outcome` | enum | `completed`, `handed_off`, `blocked_on_human`, `rejected`, `timed_out`, `budget_exceeded`, `policy_denied` |
+| `started_at`, `ended_at` | timestamp | bounds `elapsed` |
+| `elapsed` | duration | derived; wall-clock |
+| `effort` | duration | **the attribution quantity** — logged time for humans, or elapsed minus internal-block time for agents. Never equal to `elapsed` for a human leg by assumption |
+| `effort_inferred` | bool | true when `effort` was estimated rather than measured; flags the ticket's attribution as estimated |
+| `blocked_on_internal` | duration | time waiting on an ask-human answer; excluded from `effort`, excluded from SLA pausing |
+| `outcome` | enum | `completed`, `handed_off`, `blocked_on_human`, `rejected`, `timed_out`, `budget_exceeded`, `policy_denied`, `superseded` (output replaced by a later leg's rework) |
+| `wasted_cost` | bool | leg's cost produced no used output — feeds `waste_ratio`, see [`roi-analytics.md`](03-components/roi-analytics.md) §5A |
 | `artifacts` | jsonb | per the ticket type's `agent_io_contract` |
+| `artifact_clearance` | enum | max sensitivity of any input this leg saw; gates handoff bundle delivery |
 | `confidence` | number, nullable | agent-reported, 0–1 |
 
 ### McpCallRecord *(append-only)*
@@ -387,11 +411,25 @@ are **not** double-counted as `UsageRecord` rows, which are strictly the harness
 
 ## 5. ROI Entities
 
+### WorkingCalendar
+Date and duration maths that ignores weekends, holidays and regional differences is wrong in ways
+that compound — a 3-day SLA and a 5-day phase both mean something specific. Attached at workspace
+or project level, and referenced by SLA clocks, phase scheduling, and human `effort` inference.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `scope_type`, `scope_id`, `timezone` | | IANA zone |
+| `working_days`, `working_hours` | jsonb | e.g. Mon–Fri 09:00–17:00 |
+| `holidays` | date[] | per region; a project spanning regions may reference several and use the intersection for commitments |
+
 ### RoiBaseline
 | Field | Type | Notes |
 |---|---|---|
 | `project_id`, `ticket_type_id` | | baseline can be per-type |
-| `source` | enum | `historical_velocity`, `manual_estimate` |
+| `source` | enum | `holdout_sample` (default), `historical_velocity`, `manual_estimate` |
+| `holdout_pct` | number | share of *eligible* tickets randomised to human-only as a live control — see [`roi-analytics.md`](03-components/roi-analytics.md) §5.1 |
+| `stratum_key` | string, nullable | `estimate band × type × priority` stratum this baseline applies to |
+| `min_sample` | integer | below this many comparators, summaries are flagged `baseline_low_confidence` |
 | `baseline_hours`, `baseline_cost` | | |
 
 ### CostEntry
@@ -437,9 +475,12 @@ Derived indicators computed from `UsageRollup` at each scope — see
 |---|---|---|
 | `ticket_id`, `total_cost`, `total_cycle_time` | | |
 | `baseline_cost_used` | Money | snapshot, so history stays reproducible |
-| `roi_pct`, `time_saved` | | |
-| `autonomy_level` | enum | `fully_autonomous`, `human_assisted`, `human_only` |
-| `attributed_legs` | AttributedLeg[] | `{execution_leg_id, cost_share, time_share}` — [ADR-0004](adr/0004-roi-attribution-model.md) |
+| `roi_pct`, `time_saved` | | may be **negative**; rollups report the distribution, not only the mean |
+| `autonomy_level` | enum | `fully_autonomous`, `human_assisted`, `human_only`, `human_only_after_agent_attempt` — the last is distinct because folding it into `human_assisted` hides the failure case |
+| `wasted_cost` | Money | sum of legs flagged `wasted_cost`; feeds `waste_ratio` |
+| `baseline_quality` | enum | `holdout`, `stratified`, `unstratified`, `estimate_only` — a rollup must be able to say what its comparison is worth |
+| `flags` | string[] | `cost_unavailable`, `baseline_missing`, `baseline_low_confidence`, `effort_estimated` |
+| `attributed_legs` | AttributedLeg[] | `{execution_leg_id, cost_share, effort_share}` — [ADR-0004](adr/0004-roi-attribution-model.md) |
 
 ---
 

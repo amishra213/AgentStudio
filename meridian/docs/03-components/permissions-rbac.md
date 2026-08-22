@@ -194,8 +194,28 @@ explicitly:
 | Notifications | Never include title or body for a ticket the recipient cannot see; suppressed entirely rather than sent as a stub |
 | Links from visible tickets | Render as "restricted item" with key hidden — the relation exists but discloses nothing |
 | Activity feeds and mentions | Filtered by the same predicate |
-| ROI cost attribution | Costs of invisible tickets roll into totals only for those permitted to see the scope's full cost |
+| ROI cost attribution | See "reconciliation" below — visibility-filtered totals do not reconcile, and that has to be handled explicitly rather than ignored |
 | Audit log | `workspace_admin` and auditors retain full visibility by design — the audit trail is the one surface that must be complete |
+
+### Reconciliation: filtered aggregates do not add up, and pretending otherwise is worse
+
+If invisible tickets are excluded from rollups, two people looking at the same project see
+different total cost, and neither total matches the invoice. If they are included, the aggregate
+leaks the existence and magnitude of confidential work. There is no option that is both consistent
+and confidential, so the design picks per surface rather than pretending the tension away:
+
+| Surface | Policy |
+|---|---|
+| **Operational views** (board, timeline, backlog, search) | Strictly filtered. A PM's view of *work* shows only work they may see |
+| **Financial rollups** (project/portfolio cost, budget burn) | Computed over **all** tickets in scope, and shown only to roles holding `view_full_cost` for that scope. There is exactly one authoritative cost figure per scope, and it always reconciles with billing |
+| **Everyone else's financial view** | Sees the scope's figure only if they hold `view_full_cost`; otherwise cost is not shown at all for that scope — **not** shown as a filtered, smaller number |
+
+The rule behind it: a filtered financial total is worse than no total, because it looks
+authoritative and is silently wrong. Withholding is honest; a plausible incorrect number is not.
+
+Budget enforcement always evaluates against the unfiltered figure, so a confidential ticket
+consuming budget still stops dispatch for everyone — the enforcement is real even where the
+number is not shown.
 
 ---
 

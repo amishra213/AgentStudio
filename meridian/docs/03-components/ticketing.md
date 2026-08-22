@@ -29,10 +29,26 @@ The ITSM relationships are ordinary `TicketLink` relations:
 - A **Problem** is `resolved_by` a **Change**.
 - A **Change** `implements` one or more delivery tickets.
 
-Incidents carry an `sla_policy` (response and resolution targets). SLA clocks pause while the
-ticket is in a `blocked`-category status (e.g. awaiting customer) and resume on return — the
-distinction between elapsed time and *accountable* time being the thing SLA reporting lives or
-dies on.
+Incidents carry an `sla_policy` (response and resolution targets).
+
+**SLA clocks come in two classes, and conflating them is a reporting error with commercial
+consequences:**
+
+| Class | Pauses when | Example |
+|---|---|---|
+| `external` | The organisation is genuinely waiting on a party outside it — the customer, a vendor | `Awaiting Customer` |
+| `internal` | Never pauses for internal dependencies; runs until resolution | Time-to-resolve against a customer commitment |
+
+A status declares `sla_behaviour` per clock class rather than one blanket pause flag. The
+distinction matters most for **ask-human**: an agent blocking to ask your own team a question is an
+internal dependency. Pausing the customer-facing clock for it would mean the resolution SLA
+improves precisely because your automation got stuck — a metric that rewards the wrong thing, and
+one that is trivially gameable once anyone notices. Ask-human therefore pauses **neither** clock by
+default; the elapsed time is separately attributed to `blocked_on_internal` so it is visible as its
+own cost without laundering the commitment.
+
+Time-in-blocked is tracked per class, so "how long did we hold this" and "how long were we waiting
+on someone else" remain separately answerable.
 
 ---
 
@@ -77,7 +93,7 @@ analogue of a phase Gate, and it's the mechanism behind agent output requiring h
 | Trigger | Action |
 |---|---|
 | `on_enter: Triaged` | Evaluate TriggerRules — may make the ticket eligible for agent pickup |
-| `on_enter: AwaitingCustomer` | Pause SLA clock; notify watchers |
+| `on_enter: AwaitingCustomer` | Pause the `external` SLA clock only; notify watchers |
 | `on_enter: Done` | Compute `RoiSummary` |
 | `on_exit: Blocked` | Record time-in-blocked for cycle-time analytics |
 

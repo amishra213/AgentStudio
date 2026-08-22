@@ -99,6 +99,76 @@ kind of worker is a configuration act, not a deployment.
 
 ---
 
+## 3A. Execution Modes — Shadow, Propose, Autonomous
+
+A profile runs in one of three modes. This is the mechanism for introducing agents into a live
+tracker without betting the tracker on them, and it is missing from most agent platforms — which is
+why their first deployment is also their first incident.
+
+| Mode | Agent does | Meridian applies | Cost | Use |
+|---|---|---|---|---|
+| `shadow` | Full reasoning; **all MCP calls restricted to `read`-class tools**; produces the artifact it *would* have produced | Nothing. Output is stored on a shadow leg, visible only to admins and the profile's owner | Real | Evaluating a new profile, and generating the counterfactual for ROI baselines |
+| `propose` | Full reasoning; may call `write_internal` tools | Output posted as a `proposal` comment; **no status transition, no field write** without a human accepting | Real | Building trust; the default for a newly granted profile |
+| `autonomous` | Full reasoning and granted writes | Applied directly, subject to workflow validation and approval gates | Real | Steady state for profiles with a track record |
+
+Properties worth stating:
+
+- **Shadow legs never mutate the ticket** and are excluded from `autonomy_level` and from the
+  ticket's `total_cost` in headline ROI — they are reported separately as evaluation spend, because
+  counting evaluation against delivery ROI penalises exactly the behaviour that makes the numbers
+  trustworthy.
+- **Shadow output is scoreable.** Where a human subsequently completes the ticket, Meridian records
+  the divergence between the shadow artifact and the human's actual output. That is a direct,
+  cheap, pre-production quality measure — and it is a far better promotion signal than a vendor's
+  benchmark.
+- **Mode is per profile per project**, so the same profile can be autonomous on low-severity
+  incidents and in `propose` on P1s.
+- **Promotion is deliberate**, recorded as a configuration change with its supporting metrics.
+
+---
+
+## 3B. Profile Versioning
+
+An `AgentProfile` whose `model_config`, `system_policy`, `capability_tags`, or grants change is
+materially a different worker. Without versioning, "Agent X's ROI trend" silently compares
+pre-change and post-change behaviour and the trend line means nothing.
+
+Every mutation to those fields creates a new `AgentProfileVersion` (semver-ish, auto-incremented).
+`ExecutionLeg` records the **version** it ran under, not just the profile. Consequences:
+
+- Efficiency and ROI trends are plotted per version, with change markers on the timeline — a step
+  change in `first_pass_yield` is attributable to the config change that caused it.
+- A regression can be diagnosed and rolled back to a prior version, which is otherwise guesswork.
+- Comparing versions is the natural A/B: run v3 in `shadow` against live v2 traffic and compare
+  divergence before promoting.
+
+---
+
+## 3C. Circuit Breaker
+
+MCP *installations* can be marked degraded ([`mcp-marketplace.md`](mcp-marketplace.md) §5), but a
+failing **profile** needs its own brake — a profile can be perfectly connected and still be wrong
+about everything.
+
+A profile is auto-paused when, over a rolling window (default 20 legs or 24h):
+
+| Trip condition | Default threshold | Usual cause |
+|---|---|---|
+| Rejection rate | > 40% | Mis-scoped `accepts_ticket_types`, or trigger filter too broad |
+| `denied_by_policy` rate | > 25% | Missing grants — a **policy** fix, not a model fix |
+| Handoff rate | > 60% | Profile is a router, not a worker; capability tags wrong |
+| Human override rate | > 50% | Output not trusted in practice |
+| Cost per ticket vs. its own trailing median | > 3× | Runaway loops or a degraded upstream server |
+
+Auto-pause stops new dispatch, leaves in-flight legs to finish, and raises an admin notification
+naming the tripped condition and its numbers. It never silently degrades throughput — a paused
+profile is loudly paused, because the alternative is a queue quietly filling with unworked tickets.
+
+Thresholds are per profile and per project. A profile in `shadow` mode has a higher tolerance since
+its failures are free.
+
+---
+
 ## 4. Claim and Lease
 
 With event and scheduled triggers both live, and possibly several harness replicas, duplicate work
@@ -157,7 +227,7 @@ Four terminal outcomes, each an MCP tool call back into Meridian:
 | Outcome | Tool | Effect |
 |---|---|---|
 | **Complete** | `tickets.complete` | Artifacts attached, status advanced through the Workflow Engine (which may route to a review state rather than done), leg closed as `completed` |
-| **Ask human** | `tickets.ask_human` | Posts a `question` comment, moves status to a `blocked`-category state, starts an SLA clock, notifies the owner. **The leg stays open**; the harness is later resumed with the answer — this is not a new hop |
+| **Ask human** | `tickets.ask_human` | Posts a `question` comment, moves status to a `blocked`-category state, starts a **response** clock, notifies the owner. Pauses neither SLA clock — an internal dependency must not launder a customer commitment ([`ticketing.md`](ticketing.md) §1). **The leg stays open** and its waiting time is attributed to `blocked_on_internal`, excluded from the leg's `effort`; the harness is later resumed with the answer — this is not a new hop |
 | **Handoff** | `tickets.handoff` | Closes the leg as `handed_off`, creates a `HandoffEvent` with a curated `context_bundle`, routes per §7 |
 | **Reject** | `tickets.reject` | Closes the leg as `rejected`, returns the ticket to the queue or to a human, with a reason |
 
@@ -180,6 +250,28 @@ leg saw:
 
 Bounding the bundle keeps context cost flat across a chain and limits each subsequent agent's
 exposure to only what it needs.
+
+### The bundle is a redaction hole unless it is treated as one
+
+`summary` and `artifacts_so_far` are **authored by the handing-off agent**, which may hold a higher
+clearance than the recipient. Field-level sensitivity
+([`permissions-rbac.md`](permissions-rbac.md) §7) filters *payloads*; it does nothing about prose
+an agent wrote after reading those fields. Without a control, a two-hop handoff silently launders
+every `secret` field into plain text.
+
+The bundle therefore carries a **clearance label** — the maximum sensitivity of any input the
+authoring leg saw — and is gated on delivery:
+
+| Recipient clearance vs. bundle label | Behaviour |
+|---|---|
+| Equal or higher | Delivered as authored |
+| Lower | Bundle is **regenerated** under an explicit redaction constraint scoped to the recipient's clearance, and re-labelled. The original is retained on the `HandoffEvent` for audit, visible only at the original clearance |
+| Lower, and regeneration would remove information the reason code depends on | Handoff escalates to a human rather than delivering a degraded bundle |
+
+Regeneration is a model call and can fail to redact perfectly, so it is a mitigation rather than a
+guarantee. Where a ticket type's fields are marked `secret`, the stronger control is to prevent the
+cross-clearance handoff in the first place: `AgentProfile.allowed_handoff_targets` should not span
+clearance boundaries for such types, and the admin UI flags configurations that do.
 
 ### Routing the handoff
 

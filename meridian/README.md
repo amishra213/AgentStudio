@@ -85,6 +85,7 @@ The harness is the only thing that *executes*. Meridian is the only thing that *
 | [`docs/05-sequence-flows.md`](docs/05-sequence-flows.md) | Worked end-to-end flows |
 | [`docs/06-security.md`](docs/06-security.md) | Tenancy, MCP trust, prompt injection, secrets, audit |
 | [`docs/07-roadmap.md`](docs/07-roadmap.md) | Phased build plan |
+| [`docs/08-design-critique.md`](docs/08-design-critique.md) | Adversarial review: defects fixed, and known-open issues |
 | **ADRs** | |
 | [`docs/adr/0001-modular-monolith-vs-microservices.md`](docs/adr/0001-modular-monolith-vs-microservices.md) | Service decomposition |
 | [`docs/adr/0002-mcp-as-integration-substrate.md`](docs/adr/0002-mcp-as-integration-substrate.md) | MCP instead of a bespoke agent protocol |

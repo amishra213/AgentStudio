@@ -115,28 +115,107 @@ whole baseline.
 
 ### Baselines — compared to what?
 
+This is where AI-ROI reporting usually goes wrong, so the mechanism is specified defensively.
+
 | Source | Method | Best for |
 |---|---|---|
-| `historical_velocity` | Mean cost/time of the last N **human-only** tickets of this type in this project — from before agents were enabled, or from tickets deliberately run human-only for calibration | Projects with history |
+| `holdout_sample` | A randomised share of eligible tickets is deliberately routed **human-only**; their cost/time is the live control. The default and the only source that survives scrutiny | Any project with steady ticket flow |
+| `historical_velocity` | Mean cost/time of comparable human-only tickets **within the same complexity stratum** (§5.1) | Projects with history but no appetite for a holdout |
 | `manual_estimate` | An explicit PM figure ("a change like this takes a consultant 4h at $150/h") | New projects; types with too little history |
+
+#### 5.1 Selection bias is the default failure mode
+
+Agents get the tractable work. Trigger rules select on type, status, labels and severity — which
+correlate strongly with difficulty — so the tickets agents complete are systematically easier than
+the population a naive `historical_velocity` baseline averages over. Comparing them yields a
+flattering number that is simply wrong, and it is wrong in the direction everybody wants to
+believe.
+
+Three controls, in order of strength:
+
+1. **Holdout sampling (default).** `RoiBaseline.holdout_pct` (default 10%) routes a random share of
+   *otherwise-eligible* tickets to humans. Randomisation is at the point of eligibility, after the
+   trigger filter matches, so the control group is drawn from exactly the population the agent
+   would have worked. This is the only construction that supports a causal claim.
+2. **Complexity stratification.** Where no holdout is run, baselines are computed per stratum
+   (`estimate` band × ticket type × priority) and a ticket is compared only against its own
+   stratum. `RoiBaseline.stratum_key` records which was used.
+3. **Comparability flagging.** If an agent-completed ticket has no populated stratum with at least
+   `min_sample` (default 5) human comparators, its `RoiSummary` is flagged
+   `baseline_low_confidence` and excluded from headline rollups — reported separately rather than
+   silently averaged in.
+
+Rollups carry the resulting quality band (`baseline_quality: holdout | stratified | unstratified |
+estimate_only`) so a reader knows what the number is worth. A dashboard that cannot say how its
+baseline was constructed should not be shown to a CFO.
+
+#### 5.2 Snapshots
 
 Baselines are **snapshotted** onto each `RoiSummary` (`baseline_cost_used`). Revising a baseline
 never silently rewrites past summaries; recomputation is explicit and logged, so a quarter's
-reported ROI stays reproducible.
+reported ROI stays reproducible. Without a live holdout, a baseline also ages into the pre-AI era
+and reported ROI inflates over time for no real reason — which is why the holdout is the default.
 
-Keeping a small human-only control stream running deliberately is the honest way to keep
-`historical_velocity` current. Otherwise the baseline ages into the pre-AI era and reported ROI
-inflates over time for no real reason — the most common way these numbers become fiction.
+---
+
+## 5A. Waste, Abandonment, and Negative Outcomes
+
+An ROI system that can only record successes is a marketing instrument. The cases that matter most
+are the ones where agent involvement **cost more than it returned**, and they must be first-class
+rather than absorbed into averages.
+
+| Case | How it is recorded |
+|---|---|
+| Agent attempted, rejected, human redid the work | Agent legs' cost is retained and tagged `wasted_cost`; ticket `autonomy_level` is `human_only_after_agent_attempt`, *not* `human_assisted` |
+| Agent completed, human reverted or reworked substantially | Cost of the superseded leg tagged `wasted_cost`; `rework_rate` incremented |
+| Handoff chain escalated on a guardrail | All legs before escalation tagged `wasted_cost` unless their artifacts were actually used |
+| Ticket cancelled after agent work | Costs retained, reported as sunk cost on cancelled work, excluded from completed-ticket averages |
+
+Consequences for reporting:
+
+- **`net_savings = Σ(baseline_cost) − Σ(total_cost)` is computed over *all* agent-touched tickets,
+  including the failures.** A rollup that silently drops rejected attempts overstates savings by
+  exactly the amount that matters most.
+- **`waste_ratio = wasted_cost / total_agent_cost`** is a headline metric alongside ROI. A rising
+  waste ratio with flat ROI means the wins are subsidising an increasing number of failed attempts.
+- **Negative-ROI tickets are reported, not clipped.** `roi_pct` may be negative; rollups show the
+  distribution, not only the mean, because a mean over a long tail of small wins and a few large
+  losses is uninformative.
+
+This is also what makes shadow mode ([`agent-harness.md`](agent-harness.md) §3A) valuable: it
+produces the counterfactual without spending real budget on failures.
 
 ### Attribution across legs
 
 Per [ADR-0004](../adr/0004-roi-attribution-model.md), a ticket touched by three agents and a human
-reviewer splits cost and time by actual contribution:
+reviewer splits cost and effort by actual contribution.
+
+**Elapsed time and effort are different quantities and must not be conflated.** An agent leg is
+usually wall-clock-bounded and effort-equals-elapsed. A human leg is not: a reviewer who holds a
+ticket for three days and spends forty minutes on it has an elapsed of 3d and an effort of 0:40.
+Attributing by elapsed would inflate human contribution roughly by the ratio of working hours to
+calendar hours — and correspondingly understate every agent on the ticket.
+
+Each `ExecutionLeg` therefore carries both:
+
+| Quantity | Agent leg | Human leg |
+|---|---|---|
+| `elapsed` | claim → terminal outcome | assignment → terminal outcome |
+| `effort` | equals `elapsed` minus time blocked on a human answer | logged time, or `elapsed` clamped to the project's working calendar **and** to a configured `max_inferred_effort` per leg (default 25% of elapsed), flagged `effort_inferred` |
 
 ```
-cost_share[leg] = CostEntry sum for leg / total_cost
-time_share[leg] = leg duration / total_cycle_time
+cost_share[leg]   = CostEntry sum for leg / total_cost
+effort_share[leg] = leg effort / Σ(leg effort)
 ```
+
+Cycle time remains reported separately at ticket level — it answers "how long did this take to get
+done", which is a genuinely different question from "who did the work" and should never be used as
+a proxy for it.
+
+Where `effort_inferred` is set on any leg, the ticket's attribution is flagged as estimated. Turning
+on required time tracking ([`project-administration.md`](project-administration.md) §4) is what
+converts these into measured values; organisations that decline to do so get attribution with a
+stated error bar rather than a false precision.
 
 Shares are stored, not recomputed at query time. The sum across legs equals the ticket total,
 which is what lets portfolio spend reconcile with actual billing while per-agent contribution

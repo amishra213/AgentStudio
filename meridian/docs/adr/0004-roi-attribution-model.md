@@ -15,9 +15,21 @@ Attribute a ticket's cost and time to each `ExecutionLeg` by that leg's **actual
 cost and total cycle time (see [`roi-analytics.md`](../03-components/roi-analytics.md) §4):
 
 ```
-cost_share[leg] = CostEntry sum for leg / total_cost
-time_share[leg] = leg duration / total_cycle_time
+cost_share[leg]   = CostEntry sum for leg / total_cost
+effort_share[leg] = leg effort / Σ(leg effort)
 ```
+
+**Attribution is by effort, not elapsed time.** An earlier revision of this ADR used
+`leg duration / total_cycle_time`, which is wrong for human legs: a reviewer holding a ticket for
+three days while spending forty minutes on it would be attributed three days of contribution,
+inflating human share by roughly the ratio of calendar hours to working hours and understating
+every agent on the ticket. `ExecutionLeg` therefore carries `elapsed` and `effort` separately, and
+only `effort` drives attribution. Cycle time is reported at ticket level as its own metric, since
+"how long did this take" is a different question from "who did the work".
+
+Where `effort` is inferred rather than measured (time tracking off), the leg is flagged
+`effort_inferred` and the ticket's attribution is reported as estimated rather than presented at
+false precision.
 
 This is computed and stored per ticket in `RoiSummary.attributed_legs`, not derived on the fly at
 dashboard-query time, so historical rollups stay stable even if, e.g., an agent's later

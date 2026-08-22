@@ -30,7 +30,10 @@ concepts it builds on.
 7. [`06-security.md`](06-security.md) — tenancy, visibility enforcement, MCP trust, prompt
    injection, credentials, audit.
 8. [`07-roadmap.md`](07-roadmap.md) — phased delivery plan.
-9. `adr/` — decision records:
+9. [`08-design-critique.md`](08-design-critique.md) — adversarial review of this design: defects
+   found and fixed, and known-open issues with the reasoning for accepting them. **Read this
+   before building** — it is where the design says what it is bad at.
+10. `adr/` — decision records:
 
    | ADR | Decision |
    |---|---|

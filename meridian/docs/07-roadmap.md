@@ -45,7 +45,11 @@
 - Single-agent execution: complete, reject, **ask-human** with SLA clock.
 - OpenHands reference integration.
 
-**Exit:** a scheduled sweep picks up matching tickets and works them unattended (SC-3).
+- **Execution modes**: `shadow` and `propose` before `autonomous` — [`agent-harness.md`](03-components/agent-harness.md) §3A.
+- Agent profile versioning; per-profile circuit breaker — §3B, §3C.
+
+**Exit:** a profile runs in shadow against live traffic, is scored, and is promoted deliberately;
+a scheduled sweep then works matching tickets unattended (SC-3).
 
 ## Phase 5 — Events, Routing, and Handoff
 - Event stream (webhook/SSE) alongside schedules — the dual-trigger guarantee.
@@ -68,7 +72,10 @@
 - Cost split (model / MCP / human) through every rollup — §3.
 - `UsageRollup` and `EfficiencyMetric` at ticket → sprint/phase → project → portfolio — §4.
 - **Budgets** at every scope with thresholds and `on_breach` enforcement — §7.
-- ROI baselines, per-leg attribution, project- and portfolio-level ROI — §5–6.
+- ROI baselines with **holdout sampling and complexity stratification** — §5.1.
+- **Waste accounting**: `wasted_cost`, `waste_ratio`, negative-ROI distribution reporting — §5A.
+- Per-leg attribution by **effort, not elapsed** — [ADR-0004](adr/0004-roi-attribution-model.md).
+- Project- and portfolio-level ROI; `view_full_cost` gating on financial rollups — §6.
 - Drill-through to harness traces via `harness_step_id`.
 
 **Exit:** a closed sprint and its parent project both produce a defensible $ / hours-saved report (SC-10, SC-11).
