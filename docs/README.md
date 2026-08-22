@@ -32,7 +32,6 @@ and VS Code.
 06-security.md          ← authn/z, tenancy, secrets, sandboxing
 07-roadmap.md           ← phased implementation plan (Phase 0 → Phase 11)
 adr/                    ← architectural decision records (the "why" behind key choices)
-research/               ← analyses of external systems that inform our design
 ```
 
 ---
@@ -91,13 +90,6 @@ research/               ← analyses of external systems that inform our design
 | [05-sequence-flows.md](./05-sequence-flows.md) | End-to-end Mermaid sequence diagrams: happy-path task execution, HITL clarification flow, Playwright test-fail-and-fix loop, knowledge retrieval, and Delivery Bundle assembly. |
 | [06-security.md](./06-security.md) | Authentication (OAuth PKCE / JWT), per-tenant DB row isolation, per-role MCP tool allowlists, Docker sandboxing for code execution and Playwright, secrets management (Vault / cloud KMS), domain allowlists, and supply-chain controls for MCP server upgrades. |
 | [07-roadmap.md](./07-roadmap.md) | Phased implementation plan from Phase 0 (monorepo scaffolding) through Phase 11 (observability and hardening); deliverables, packages affected, design decisions locked in, and exit criteria for each phase. |
-
-### Research Notes
-
-| File | Description |
-|------|-------------|
-| [research/openhands-context-management.md](./research/openhands-context-management.md) | Analysis of context management in the OpenHands agent SDK: why its agents burn tokens at a high rate, thirteen identified gaps (condensation triggered at the full context window, size-blind event counts, a summariser fed 500-character previews without tool arguments, no observation lifecycle, context isolation off by default), and a layered redesign proposal. Closes with what Agent Studio already avoids by construction and what remains open for us. |
-| [research/openhands-context-cost-model.py](./research/openhands-context-cost-model.py) | Dependency-free policy simulator backing the cost comparisons in the note above. Re-implements the OpenHands condenser's trigger arithmetic over a synthetic event stream and sweeps condensation thresholds. |
 
 ### Architectural Decision Records (13 ADRs)
 
